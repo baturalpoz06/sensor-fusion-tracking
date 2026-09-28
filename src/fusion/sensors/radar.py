@@ -41,6 +41,20 @@ def radar_measure(
     return np.column_stack([noisy_range, noisy_bearing])
 
 
+def radar_to_cartesian(z: np.ndarray) -> np.ndarray:
+    """Convert radar measurements to positions without any filtering.
+
+    Args:
+        z: Shape (n, 2) measurements [range, bearing].
+
+    Returns:
+        Shape (n, 2) positions [r cos b, r sin b].
+    """
+    z = np.asarray(z, dtype=float)
+    r, b = z[:, 0], z[:, 1]
+    return np.column_stack([r * np.cos(b), r * np.sin(b)])
+
+
 class RadarModel:
     """Radar model for the EKF: z = [range, bearing] = h(x) + v.
 

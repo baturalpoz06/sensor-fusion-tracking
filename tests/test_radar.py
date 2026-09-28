@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 
 from fusion.angles import wrap_angle
-from fusion.sensors.radar import RadarModel, radar_initial_estimate, radar_measure
+from fusion.sensors.radar import (
+    RadarModel,
+    radar_initial_estimate,
+    radar_measure,
+    radar_to_cartesian,
+)
 
 JACOBIAN_STATES = [
     [100.0, 50.0, 3.0, -2.0],
@@ -47,6 +52,13 @@ def test_noise_level_matches_parameters():
     bearing_errors = z[:, 1] - 0.0
     np.testing.assert_allclose(range_errors.std(), 5.0, rtol=0.05)
     np.testing.assert_allclose(bearing_errors.std(), 0.01, rtol=0.05)
+
+
+def test_radar_to_cartesian_known_values():
+    z = np.array([[10.0, 0.0], [10.0, np.pi / 2], [10.0, np.pi], [5.0, np.arctan2(4.0, 3.0)]])
+    np.testing.assert_allclose(
+        radar_to_cartesian(z), [[10.0, 0.0], [0.0, 10.0], [-10.0, 0.0], [3.0, 4.0]], atol=1e-12
+    )
 
 
 def test_model_h_matches_geometry():
