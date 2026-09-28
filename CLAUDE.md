@@ -9,10 +9,10 @@
 - Subpackages: filters, association, sensors, tracker
 - Dependencies are declared only in pyproject.toml (no requirements.txt)
 
-## Division of work
-- The user writes filter mathematics (KF/EKF/UKF) and their tests personally
-- Do not implement or complete filter math unless explicitly asked
-- Help with boilerplate, CI configuration, refactoring, docstrings, and debugging
+## Working style
+- Claude Code writes the code, including filter mathematics; the user reviews it
+- After each change, explain in Turkish what it does and why, briefly
+- Every new function comes with pytest tests
 
 ## Before suggesting a commit
 - Run `ruff check .` and `pytest`; both must pass
