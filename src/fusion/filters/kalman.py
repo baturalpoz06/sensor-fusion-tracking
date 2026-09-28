@@ -2,8 +2,10 @@
 
 import numpy as np
 
+from fusion.filters.base import CVFilterBase
 
-class KalmanFilter:
+
+class KalmanFilter(CVFilterBase):
     """Linear Kalman filter for state [x, y, vx, vy] and position measurements [x, y].
 
     Motion model (constant velocity, white-noise acceleration held over each step):
@@ -37,33 +39,7 @@ class KalmanFilter:
             x0: Shape (4,) initial state estimate.
             P0: Shape (4, 4) initial state covariance.
         """
-        self.x = np.array(x0, dtype=float)
-        self.P = np.array(P0, dtype=float)
-        if self.x.shape != (4,):
-            raise ValueError(f"x0 must have shape (4,), got {self.x.shape}")
-        if self.P.shape != (4, 4):
-            raise ValueError(f"P0 must have shape (4, 4), got {self.P.shape}")
-
-        self.F = np.array(
-            [
-                [1.0, 0.0, dt, 0.0],
-                [0.0, 1.0, 0.0, dt],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ]
-        )
-
-        # Acceleration held constant over one step moves position by a*dt^2/2 and
-        # velocity by a*dt, matching the simulator in fusion.scenario.
-        G = np.array(  # noqa: N806 - standard Kalman filter notation
-            [
-                [0.5 * dt**2, 0.0],
-                [0.0, 0.5 * dt**2],
-                [dt, 0.0],
-                [0.0, dt],
-            ]
-        )
-        self.Q = accel_std**2 * G @ G.T
+        super().__init__(dt, accel_std, x0, P0)
 
         self.H = np.array(
             [
@@ -72,11 +48,6 @@ class KalmanFilter:
             ]
         )
         self.R = pos_std**2 * np.eye(2)
-
-    def predict(self) -> None:
-        """Propagate the state and covariance one time step forward."""
-        self.x = self.F @ self.x
-        self.P = self.F @ self.P @ self.F.T + self.Q
 
     def update(self, z: np.ndarray) -> None:
         """Correct the estimate with a position measurement.
