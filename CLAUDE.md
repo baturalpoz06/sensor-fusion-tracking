@@ -16,3 +16,5 @@
 
 ## Before suggesting a commit
 - Run `ruff check .` and `pytest`; both must pass
+- Stage files with explicit paths (git add src tests scripts), never git add .
+- Never commit .claude/ or any personal settings file
