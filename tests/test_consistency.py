@@ -1,0 +1,168 @@
+"""Tests for the NEES computation and its chi-square band."""
+
+import numpy as np
+import pytest
+
+from fusion.consistency import (
+    nees,
+    nees_band,
+    nees_by_component,
+    summarize_nees,
+)
+from fusion.filters.kalman import KalmanFilter
+from fusion.scenario import constant_velocity_trajectory
+from fusion.sensors.position import position_measure
+
+DT = 0.1
+ACCEL_STD = 0.5
+POS_STD = 5.0
+VELOCITY_STD = 20.0
+N_STEPS = 200
+N_SEEDS = 50
+
+
+def test_nees_hand_computed():
+    errors = np.array([[1.0, 1.0], [2.0, 0.0]])
+    covariances = np.array([[[2.0, 1.0], [1.0, 2.0]], [[4.0, 0.0], [0.0, 9.0]]])
+    # P = [[2, 1], [1, 2]] has inverse [[2, -1], [-1, 2]] / 3, so e = [1, 1] gives 2/3.
+    # Diagonal P = diag(4, 9) with e = [2, 0] gives 2^2 / 4 = 1.
+    np.testing.assert_allclose(nees(errors, covariances), [2.0 / 3.0, 1.0])
+
+
+def test_nees_of_identity_covariance_is_squared_norm():
+    errors = np.array([[3.0, 4.0, 0.0, 0.0]])
+    np.testing.assert_allclose(nees(errors, np.eye(4)[None]), [25.0])
+
+
+def test_nees_rejects_inconsistent_shapes():
+    with pytest.raises(ValueError, match="errors"):
+        nees(np.zeros(4), np.eye(4)[None])
+    with pytest.raises(ValueError, match="covariances"):
+        nees(np.zeros((2, 4)), np.zeros((2, 3, 3)))
+
+
+def test_nees_by_component_uses_the_matching_blocks():
+    truth = np.array([[10.0, 20.0, 3.0, 4.0]])
+    estimates = np.array([[9.0, 20.0, 3.0, 2.0]])  # e = [1, 0, 0, 2]
+    covariances = np.array(
+        [
+            [
+                [2.0, 0.5, 0.3, 0.0],
+                [0.5, 1.0, 0.0, 0.3],
+                [0.3, 0.0, 4.0, 1.0],
+                [0.0, 0.3, 1.0, 2.0],
+            ]
+        ]
+    )
+    result = nees_by_component(truth, estimates, covariances)
+
+    # Position block [[2, .5], [.5, 1]], e = [1, 0]: e^T P^-1 e = P^-1[0, 0] = 1 / (2 - .25).
+    np.testing.assert_allclose(result["position"], [1.0 / 1.75])
+    # Velocity block [[4, 1], [1, 2]], e = [0, 2]: 4 * P^-1[1, 1] = 4 * 4 / 7.
+    np.testing.assert_allclose(result["velocity"], [16.0 / 7.0])
+    expected_state = np.array([1.0, 0.0, 0.0, 2.0]) @ np.linalg.inv(covariances[0]) @ [1, 0, 0, 2]
+    np.testing.assert_allclose(result["state"], [expected_state])
+
+
+def test_nees_band_matches_closed_form_for_two_degrees_of_freedom():
+    # chi2 with 2 dof is exponential: quantile q = -2 ln(1 - p).
+    lower, upper = nees_band(dim=2, n_runs=1)
+    assert lower == pytest.approx(-2.0 * np.log(1.0 - 0.025))
+    assert upper == pytest.approx(-2.0 * np.log(1.0 - 0.975))
+
+
+@pytest.mark.parametrize("dim", [2, 4])
+def test_nees_band_contains_the_expected_value_and_narrows_with_more_runs(dim):
+    widths = []
+    for n_runs in (1, 10, 50, 500):
+        lower, upper = nees_band(dim, n_runs)
+        assert lower < dim < upper
+        widths.append(upper - lower)
+    assert all(a > b for a, b in zip(widths, widths[1:], strict=False))
+
+
+def test_nees_band_rejects_invalid_arguments():
+    with pytest.raises(ValueError):
+        nees_band(dim=0, n_runs=10)
+    with pytest.raises(ValueError):
+        nees_band(dim=2, n_runs=10, confidence=1.0)
+
+
+def test_summarize_nees_hand_computed():
+    lower, upper = nees_band(dim=2, n_runs=50)
+    mean_nees = np.array([100.0, lower - 0.1, 2.0, upper + 0.1, 2.5, 2.0])
+    mask = np.array([False, True, True, True, True, True])  # first (huge) step is excluded
+    summary = summarize_nees(mean_nees, dim=2, n_runs=50, mask=mask)
+    assert summary.lower == pytest.approx(lower)
+    assert summary.upper == pytest.approx(upper)
+    assert summary.mean == pytest.approx(np.mean(mean_nees[1:]))
+    assert summary.inside == pytest.approx(3 / 5)
+    assert summary.above == pytest.approx(1 / 5)
+    assert summary.below == pytest.approx(1 / 5)
+    with pytest.raises(ValueError, match="no steps"):
+        summarize_nees(mean_nees, dim=2, n_runs=50, mask=np.zeros(6, dtype=bool))
+
+
+def linear_kf_nees(seed: int, filter_pos_std: float) -> dict[str, np.ndarray]:
+    """NEES of a linear KF on a simulated run whose measurement noise is POS_STD.
+
+    The initial error is drawn from N(0, P0), so a filter with the true noise
+    level is consistent from step 0 on and needs no burn-in.
+    """
+    trajectory_ss, sensor_ss, init_ss = np.random.SeedSequence(seed).spawn(3)
+    truth = constant_velocity_trajectory(
+        np.array([0.0, 0.0, 15.0, -8.0]),
+        dt=DT,
+        n_steps=N_STEPS,
+        accel_std=ACCEL_STD,
+        rng=np.random.default_rng(trajectory_ss),
+    )
+    measurements = position_measure(truth, POS_STD, rng=np.random.default_rng(sensor_ss))
+
+    P0 = np.diag([POS_STD**2, POS_STD**2, VELOCITY_STD**2, VELOCITY_STD**2])  # noqa: N806
+    x0 = truth[0] + np.random.default_rng(init_ss).multivariate_normal(np.zeros(4), P0)
+    kf = KalmanFilter(dt=DT, accel_std=ACCEL_STD, pos_std=filter_pos_std, x0=x0, P0=P0)
+
+    estimates = np.zeros((N_STEPS + 1, 4))
+    covariances = np.zeros((N_STEPS + 1, 4, 4))
+    for k in range(N_STEPS + 1):
+        if k > 0:
+            kf.predict()
+        kf.update(measurements[k])
+        estimates[k] = kf.x
+        covariances[k] = kf.P
+    return nees_by_component(truth, estimates, covariances)
+
+
+def summaries(filter_pos_std: float):
+    trials = [linear_kf_nees(seed, filter_pos_std) for seed in range(N_SEEDS)]
+    dims = {"state": 4, "position": 2, "velocity": 2}
+    mask = np.ones(N_STEPS + 1, dtype=bool)
+    return {
+        name: summarize_nees(np.mean([t[name] for t in trials], axis=0), dim, N_SEEDS, mask)
+        for name, dim in dims.items()
+    }
+
+
+def test_honest_linear_filter_looks_honest():
+    # Observed inside the band: state 98%, position 94%, velocity 92% (about 95% expected).
+    for name, summary in summaries(POS_STD).items():
+        assert summary.inside > 0.85, name
+        assert summary.above < 0.15, name
+        assert summary.below < 0.15, name
+        assert summary.lower < summary.mean < summary.upper, name
+
+
+def test_overconfident_filter_is_above_the_band():
+    # The filter believes its measurements are 10x more precise than they are.
+    # Observed: 100% of the steps above the band, mean NEES about 60x the expected value.
+    for name, summary in summaries(POS_STD / 10.0).items():
+        assert summary.above > 0.95, name
+        assert summary.mean > 5.0 * summary.upper, name
+
+
+def test_underconfident_filter_is_below_the_band():
+    # The filter believes its measurements are 10x noisier than they are (observed ~95% below).
+    for name, summary in summaries(POS_STD * 10.0).items():
+        assert summary.below > 0.85, name
+        assert summary.mean < summary.lower, name

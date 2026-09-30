@@ -7,7 +7,7 @@ from fusion.filters.ekf import ExtendedKalmanFilter
 from fusion.scenario import constant_velocity_trajectory
 from fusion.sensors.camera import CameraModel, camera_measure
 from fusion.sensors.radar import RadarModel, radar_initial_estimate, radar_measure
-from fusion.tracking import run_tracking
+from fusion.tracking import run_tracking, run_tracking_with_covariance
 
 DT = 0.1
 RANGE_STD = 5.0
@@ -175,3 +175,76 @@ def test_invalid_inputs_raise():
             velocity_std=VELOCITY_STD,
             use_camera=True,
         )
+
+
+def reference_radar_only_covariances(radar_z: np.ndarray, radar_every: int) -> np.ndarray:
+    """Radar-only loop written out step by step, recording P after each step."""
+    model = RadarModel(RANGE_STD, RADAR_BEARING_STD)
+    x0, p0 = radar_initial_estimate(radar_z[0], RANGE_STD, RADAR_BEARING_STD, VELOCITY_STD)
+    ekf = ExtendedKalmanFilter(dt=DT, accel_std=ACCEL_STD, x0=x0, P0=p0)
+    covariances = [ekf.P.copy()]
+    for k in range(1, len(radar_z)):
+        ekf.predict()
+        if k % radar_every == 0:
+            ekf.update(radar_z[k], model)
+        covariances.append(ekf.P.copy())
+    return np.array(covariances)
+
+
+def track_with_covariance(truth, radar_z, camera_z, radar_every, use_camera):
+    return run_tracking_with_covariance(
+        truth,
+        dt=DT,
+        radar_every=radar_every,
+        radar_z=radar_z,
+        camera_z=camera_z,
+        radar_model=RadarModel(RANGE_STD, RADAR_BEARING_STD),
+        camera_model=CameraModel(CAMERA_BEARING_STD),
+        accel_std=ACCEL_STD,
+        velocity_std=VELOCITY_STD,
+        use_camera=use_camera,
+    )
+
+
+@pytest.mark.parametrize("use_camera", [True, False])
+def test_covariances_have_valid_shape_and_are_symmetric_psd(use_camera):
+    truth, radar_z, camera_z = make_data(200)
+    result = track_with_covariance(truth, radar_z, camera_z, 10, use_camera)
+    assert result.covariances.shape == (201, 4, 4)
+    assert result.estimates.shape == (201, 4)
+    np.testing.assert_allclose(
+        result.covariances, result.covariances.transpose(0, 2, 1), atol=1e-9
+    )
+    eigenvalues = np.linalg.eigvalsh(result.covariances)
+    # Relative tolerance: the covariance entries span many orders of magnitude.
+    assert np.all(eigenvalues >= -1e-9 * np.abs(eigenvalues).max(axis=1, keepdims=True))
+
+
+@pytest.mark.parametrize("use_camera", [True, False])
+def test_run_tracking_output_is_unchanged_by_covariance_recording(use_camera):
+    truth, radar_z, camera_z = make_data(200)
+    result = track_with_covariance(truth, radar_z, camera_z, 10, use_camera)
+    np.testing.assert_array_equal(
+        result.estimates, track(truth, radar_z, camera_z, 10, use_camera)
+    )
+
+
+def test_covariances_are_recorded_at_the_same_step_as_the_estimates():
+    truth, radar_z, camera_z = make_data(200)
+    result = track_with_covariance(truth, radar_z, camera_z, 10, use_camera=False)
+    _, p0 = radar_initial_estimate(radar_z[0], RANGE_STD, RADAR_BEARING_STD, VELOCITY_STD)
+    np.testing.assert_array_equal(result.covariances[0], p0)
+    np.testing.assert_array_equal(
+        result.covariances, reference_radar_only_covariances(radar_z, radar_every=10)
+    )
+
+
+def test_radar_only_covariance_grows_between_radar_steps_and_shrinks_at_them():
+    truth, radar_z, camera_z = make_data(100)
+    result = track_with_covariance(truth, radar_z, camera_z, 10, use_camera=False)
+    trace = np.trace(result.covariances, axis1=1, axis2=2)
+    for k in range(1, 101):
+        if k % 10 == 0:
+            assert trace[k] < trace[k - 1]  # predict grows, radar update shrinks more
+        else:
+            assert trace[k] > trace[k - 1]

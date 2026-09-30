@@ -5,15 +5,19 @@ import pytest
 
 from fusion import experiment
 from fusion.experiment import (
+    FILTER_METHODS,
     SCENARIOS,
     FusionConfig,
     evaluation_masks,
     make_rngs,
     position_rmse,
     run_methods,
+    run_nees_trial,
     run_trial,
     simulate,
 )
+from fusion.sensors.radar import RadarModel
+from fusion.tracking import run_tracking_with_covariance
 
 # Upper bounds on mean fusion RMSE / mean radar-only RMSE over seeds 0-4.
 # Observed (all steps / radar steps): near 2.60/6.96 m = 0.37, 2.46/6.47 m = 0.38;
@@ -124,3 +128,33 @@ def test_run_trial_structure():
     for method in ("radar_only", "fusion"):
         for mask in ("all", "radar"):
             assert np.isfinite(rmse[method][mask]) and rmse[method][mask] > 0.0
+
+
+def test_run_nees_trial_matches_hand_computed_nees():
+    config = FusionConfig(duration=10.0)
+    rngs_a, rngs_b = make_rngs(2), make_rngs(2)
+    result = run_nees_trial(SCENARIOS["near"], config, rngs_a)
+    assert set(result) == set(FILTER_METHODS)
+
+    sim = simulate(SCENARIOS["near"], config, rngs_b)
+    common = dict(
+        dt=config.dt,
+        radar_every=config.radar_every,
+        radar_z=sim.radar_z,
+        radar_model=RadarModel(config.radar_range_std, config.radar_bearing_std),
+        accel_std=config.accel_std,
+        velocity_std=config.velocity_std,
+    )
+    run = run_tracking_with_covariance(sim.truth, use_camera=False, **common)
+    k = 37  # an arbitrary step that is not a radar step
+    error = sim.truth[k] - run.estimates[k]
+    expected = error @ np.linalg.inv(run.covariances[k]) @ error
+    assert result["radar_only"]["state"][k] == pytest.approx(expected)
+    error_pos = error[:2]
+    expected_pos = error_pos @ np.linalg.inv(run.covariances[k][:2, :2]) @ error_pos
+    assert result["radar_only"]["position"][k] == pytest.approx(expected_pos)
+
+    for method in FILTER_METHODS:
+        for values in result[method].values():
+            assert values.shape == (101,)
+            assert np.all(np.isfinite(values)) and np.all(values >= 0.0)

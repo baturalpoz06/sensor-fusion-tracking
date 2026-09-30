@@ -5,12 +5,14 @@ from typing import NamedTuple
 
 import numpy as np
 
+from fusion.consistency import nees_by_component
 from fusion.scenario import constant_velocity_trajectory
 from fusion.sensors.camera import CameraModel, camera_measure
 from fusion.sensors.radar import RadarModel, radar_measure, radar_to_cartesian
-from fusion.tracking import run_tracking
+from fusion.tracking import run_tracking, run_tracking_with_covariance
 
 METHODS = ("raw", "radar_only", "fusion")
+FILTER_METHODS = ("radar_only", "fusion")
 MASKS = ("all", "radar")
 
 # Initial states [x, y, vx, vy] of side passes that never fly over the radar:
@@ -109,22 +111,26 @@ def simulate(
     return Simulation(truth, radar_z, camera_z)
 
 
+def _tracking_kwargs(sim: Simulation, config: FusionConfig) -> dict:
+    """Keyword arguments shared by every tracking run of one simulation."""
+    return dict(
+        dt=config.dt,
+        radar_every=config.radar_every,
+        radar_z=sim.radar_z,
+        radar_model=RadarModel(config.radar_range_std, config.radar_bearing_std),
+        accel_std=config.accel_std,
+        velocity_std=config.velocity_std,
+    )
+
+
 def run_methods(sim: Simulation, config: FusionConfig) -> dict[str, np.ndarray]:
     """Position estimates of each method, each of shape (n + 1, 2).
 
     "raw" is the unfiltered radar conversion; it is only meaningful at radar
     steps, which evaluation_masks selects.
     """
-    radar_model = RadarModel(config.radar_range_std, config.radar_bearing_std)
     camera_model = CameraModel(config.camera_bearing_std)
-    common = dict(
-        dt=config.dt,
-        radar_every=config.radar_every,
-        radar_z=sim.radar_z,
-        radar_model=radar_model,
-        accel_std=config.accel_std,
-        velocity_std=config.velocity_std,
-    )
+    common = _tracking_kwargs(sim, config)
     radar_only = run_tracking(sim.truth, use_camera=False, **common)
     fusion = run_tracking(
         sim.truth, camera_z=sim.camera_z, camera_model=camera_model, use_camera=True, **common
@@ -189,3 +195,36 @@ def run_trial(
             else:
                 rmse[method][name] = position_rmse(positions[method], sim.truth, mask)
     return rmse
+
+
+def run_nees_trial(
+    initial_state: np.ndarray,
+    config: FusionConfig,
+    rngs: tuple[np.random.Generator, ...],
+) -> dict[str, dict[str, np.ndarray]]:
+    """Simulate once and compute the NEES of both filters at every step.
+
+    Error (truth - estimate) and covariance of step k come from the same
+    run_tracking_with_covariance call, both recorded after all updates at k.
+
+    Returns:
+        nees[method][component], each of shape (n + 1,), for the methods in
+        FILTER_METHODS and the components of fusion.consistency.COMPONENTS.
+    """
+    sim = simulate(initial_state, config, rngs)
+    common = _tracking_kwargs(sim, config)
+    camera_model = CameraModel(config.camera_bearing_std)
+    runs = {
+        "radar_only": run_tracking_with_covariance(sim.truth, use_camera=False, **common),
+        "fusion": run_tracking_with_covariance(
+            sim.truth,
+            camera_z=sim.camera_z,
+            camera_model=camera_model,
+            use_camera=True,
+            **common,
+        ),
+    }
+    return {
+        method: nees_by_component(sim.truth, run.estimates, run.covariances)
+        for method, run in runs.items()
+    }

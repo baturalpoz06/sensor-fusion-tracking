@@ -1,10 +1,19 @@
 """Single-target tracking loop feeding radar and camera into one EKF."""
 
+from typing import NamedTuple
+
 import numpy as np
 
 from fusion.filters.ekf import ExtendedKalmanFilter
 from fusion.sensors.base import MeasurementModel
 from fusion.sensors.radar import radar_initial_estimate
+
+
+class TrackingResult(NamedTuple):
+    """Filter output at every step, each of length n + 1."""
+
+    estimates: np.ndarray
+    covariances: np.ndarray
 
 
 def run_tracking(
@@ -20,6 +29,41 @@ def run_tracking(
     velocity_std: float,
     use_camera: bool,
 ) -> np.ndarray:
+    """Run an EKF over radar measurements and, optionally, camera measurements.
+
+    Thin wrapper over run_tracking_with_covariance that drops the covariances;
+    see there for the timing, arguments and errors.
+
+    Returns:
+        Shape (n + 1, 4) estimates; row k is the estimate after all updates at step k.
+    """
+    return run_tracking_with_covariance(
+        states,
+        dt=dt,
+        radar_every=radar_every,
+        radar_z=radar_z,
+        camera_z=camera_z,
+        radar_model=radar_model,
+        camera_model=camera_model,
+        accel_std=accel_std,
+        velocity_std=velocity_std,
+        use_camera=use_camera,
+    ).estimates
+
+
+def run_tracking_with_covariance(
+    states: np.ndarray,
+    *,
+    dt: float,
+    radar_every: int,
+    radar_z: np.ndarray,
+    camera_z: np.ndarray | None = None,
+    radar_model: MeasurementModel,
+    camera_model: MeasurementModel | None = None,
+    accel_std: float,
+    velocity_std: float,
+    use_camera: bool,
+) -> TrackingResult:
     """Run an EKF over radar measurements and, optionally, camera measurements.
 
     Timing, with k the step index:
@@ -47,7 +91,8 @@ def run_tracking(
         use_camera: Whether to apply camera updates.
 
     Returns:
-        Shape (n + 1, 4) estimates; row k is the estimate after all updates at step k.
+        TrackingResult with estimates (n + 1, 4) and covariances (n + 1, 4, 4); row k of
+        both is the posterior after all updates at step k, recorded at the same moment.
 
     Raises:
         ValueError: On inconsistent inputs, or from the filter itself.
@@ -68,6 +113,7 @@ def run_tracking(
     ekf = ExtendedKalmanFilter(dt=dt, accel_std=accel_std, x0=x0, P0=p0)
 
     estimates = np.zeros((n_points, 4))
+    covariances = np.zeros((n_points, 4, 4))
     for k in range(n_points):
         if k > 0:
             ekf.predict()
@@ -76,4 +122,5 @@ def run_tracking(
         if use_camera:
             ekf.update(camera_z[k], camera_model)
         estimates[k] = ekf.x
-    return estimates
+        covariances[k] = ekf.P
+    return TrackingResult(estimates, covariances)
