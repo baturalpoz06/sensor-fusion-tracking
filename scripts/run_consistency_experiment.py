@@ -8,7 +8,7 @@ import argparse
 
 import numpy as np
 
-from fusion.consistency import COMPONENTS, summarize_nees
+from fusion.consistency import COMPONENTS, seed_mean_nees, summarize_nees
 from fusion.experiment import (
     FILTER_METHODS,
     SCENARIOS,
@@ -48,47 +48,52 @@ def main() -> None:
         "updates at step k."
     )
     print(
-        f"At every step NEES is averaged over the {n_seeds} independent seeds; the 95% band "
-        f"is chi2(N*d) quantiles / N."
+        "VERDICT (primary test): each seed's NEES is averaged over the selected steps; seeds "
+        "are independent,\nso the 95% CI of the mean of those averages is a Student t "
+        "interval over seeds. 'mean NEES' is\nthat mean (it equals the step mean of the "
+        "seed-averaged NEES). CI contains the expected value ->\nconsistent; CI above it -> "
+        "overconfident; CI below it -> underconfident."
     )
     print(
-        "Steps are correlated in time, so the step-wise seed-averaged NEES is judged against "
-        "the band step by step;\nthe overall mean is descriptive only and is NOT tested "
-        "against the band."
+        f"STEP BAND (for reference only): at every step NEES is averaged over the {n_seeds} "
+        f"seeds and compared with\nthe 95% band chi2(N*d) quantiles / N. WARNING: steps are "
+        f"dependent in time, so the band\npercentages of one group of seeds are very noisy. "
+        f"About 5% outside is expected on average, but\neven a consistent filter can have "
+        f"more than 20% of its steps above the band in a single group.\nDo not judge "
+        f"consistency from the band columns."
     )
-    print("For a consistent filter about 5% of the steps fall outside a 95% band by chance.")
 
-    # nees[scenario][method][component] -> (n + 1,) NEES averaged over seeds.
-    averaged = {}
+    # nees[scenario][method][component] -> (n_seeds, n + 1) NEES of every seed.
+    per_seed = {}
     for name, initial_state in SCENARIOS.items():
         trials = [run_nees_trial(initial_state, config, make_rngs(seed)) for seed in range(n_seeds)]
-        averaged[name] = {
-            method: {
-                comp: np.mean([t[method][comp] for t in trials], axis=0) for comp in COMPONENTS
-            }
+        per_seed[name] = {
+            method: {comp: np.stack([t[method][comp] for t in trials]) for comp in COMPONENTS}
             for method in FILTER_METHODS
         }
 
     header = (
         f"{'scenario':<9}{'method':<16}{'part':<10}{'mean NEES':>10}{'expected':>10}"
-        f"{'95% band':>17}{'inside %':>10}{'above %':>9}{'below %':>9}"
+        f"{'95% CI (seeds)':>18}{'verdict':>16}"
+        f"{'step band':>17}{'inside %':>10}{'above %':>9}{'below %':>9}"
     )
     for mask_name, mask in masks.items():
         print()
         print(f"=== {MASK_LABELS[mask_name]} ({int(mask.sum())} steps) ===")
         print(header)
         print("-" * len(header))
-        for scenario, by_method in averaged.items():
+        for scenario, by_method in per_seed.items():
             for method in FILTER_METHODS:
                 for comp in COMPONENTS:
-                    summary = summarize_nees(
-                        by_method[method][comp], DIMS[comp], n_seeds, mask
-                    )
+                    values = by_method[method][comp]
+                    test = seed_mean_nees(values, DIMS[comp], mask)
+                    summary = summarize_nees(values.mean(axis=0), DIMS[comp], n_seeds, mask)
+                    ci = f"[{test.lower:.2f}, {test.upper:.2f}]"
                     band = f"[{summary.lower:.2f}, {summary.upper:.2f}]"
                     print(
                         f"{scenario:<9}{METHOD_LABELS[method]:<16}{comp:<10}"
-                        f"{summary.mean:>10.2f}{DIMS[comp]:>10d}{band:>17}"
-                        f"{100 * summary.inside:>10.1f}{100 * summary.above:>9.1f}"
+                        f"{test.mean:>10.2f}{DIMS[comp]:>10d}{ci:>18}{test.verdict:>16}"
+                        f"{band:>17}{100 * summary.inside:>10.1f}{100 * summary.above:>9.1f}"
                         f"{100 * summary.below:>9.1f}"
                     )
 

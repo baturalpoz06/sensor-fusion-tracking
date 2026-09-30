@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 import numpy as np
 from scipy.stats import chi2
+from scipy.stats import t as student_t
 
 # State components scored separately: name -> slice of [x, y, vx, vy].
 COMPONENTS = {
@@ -90,8 +91,9 @@ class NeesSummary(NamedTuple):
     """Summary of the seed-averaged NEES over the selected steps.
 
     Attributes:
-        mean: Mean over the selected steps of the seed-averaged NEES. Descriptive
-            only: steps are correlated in time, so it has no chi-square band.
+        mean: Mean over the selected steps of the seed-averaged NEES. Steps are
+            correlated in time, so it has no chi-square band; seed_mean_nees
+            tests it with a confidence interval across seeds instead.
         lower: Lower band bound for one step.
         upper: Upper band bound for one step.
         inside: Fraction of selected steps within [lower, upper].
@@ -133,3 +135,81 @@ def summarize_nees(
     above = float(np.mean(selected > upper))
     below = float(np.mean(selected < lower))
     return NeesSummary(float(selected.mean()), lower, upper, 1.0 - above - below, above, below)
+
+
+class SeedMeanNees(NamedTuple):
+    """Confidence interval for the expected time-averaged NEES, built across seeds.
+
+    Attributes:
+        mean: Mean over seeds of each seed's NEES averaged over the selected steps.
+        lower: Lower bound of the confidence interval for that mean.
+        upper: Upper bound of the confidence interval for that mean.
+        verdict: "consistent" if the interval contains dim, "overconfident" if it
+            lies above dim, "underconfident" if it lies below.
+    """
+
+    mean: float
+    lower: float
+    upper: float
+    verdict: str
+
+
+def seed_mean_nees(
+    nees_per_seed: np.ndarray,
+    dim: int,
+    mask: np.ndarray,
+    confidence: float = 0.95,
+) -> SeedMeanNees:
+    """Test the mean NEES against dim with a statistic that is independent across seeds.
+
+    Steps of one run are correlated in time, so step-wise band counts are not
+    independent events. Seeds are: each seed's NEES is first averaged over the
+    selected steps, and the interval is built from the spread of those averages
+    across seeds. A consistent filter has expected NEES dim at every step, so
+    its time average also has expectation dim.
+
+    The interval uses the Student t distribution with n_seeds - 1 degrees of
+    freedom: the standard error comes from the same seeds, and t accounts for
+    that estimate. For hundreds of seeds it equals the normal interval to three
+    digits; for a few dozen it is slightly wider and so avoids false alarms.
+
+    Args:
+        nees_per_seed: Shape (n_seeds, n) NEES of every seed at every step.
+        dim: Dimension of the error vector (the expected NEES of a consistent filter).
+        mask: Shape (n,) boolean selection of steps; must select at least one.
+        confidence: Coverage of the interval.
+
+    Returns:
+        SeedMeanNees with the mean, the interval and the verdict.
+
+    Raises:
+        ValueError: On inconsistent shapes, fewer than 2 seeds, an empty mask or
+            an invalid confidence.
+    """
+    values = np.asarray(nees_per_seed, dtype=float)
+    mask = np.asarray(mask, dtype=bool)
+    if values.ndim != 2:
+        raise ValueError(f"nees_per_seed must have shape (n_seeds, n), got {values.shape}")
+    n_seeds, n = values.shape
+    if n_seeds < 2:
+        raise ValueError(f"need at least 2 seeds for a confidence interval, got {n_seeds}")
+    if mask.shape != (n,):
+        raise ValueError(f"mask must have shape ({n},), got {mask.shape}")
+    if not np.any(mask):
+        raise ValueError("mask selects no steps")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(f"confidence must be in (0, 1), got {confidence}")
+
+    per_seed = values[:, mask].mean(axis=1)
+    mean = float(per_seed.mean())
+    standard_error = float(per_seed.std(ddof=1) / np.sqrt(n_seeds))
+    half_width = float(student_t.ppf(0.5 + confidence / 2.0, df=n_seeds - 1)) * standard_error
+    lower, upper = mean - half_width, mean + half_width
+
+    if lower > dim:
+        verdict = "overconfident"
+    elif upper < dim:
+        verdict = "underconfident"
+    else:
+        verdict = "consistent"
+    return SeedMeanNees(mean, lower, upper, verdict)

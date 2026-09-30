@@ -7,6 +7,7 @@ from fusion.consistency import (
     nees,
     nees_band,
     nees_by_component,
+    seed_mean_nees,
     summarize_nees,
 )
 from fusion.filters.kalman import KalmanFilter
@@ -166,3 +167,77 @@ def test_underconfident_filter_is_below_the_band():
     for name, summary in summaries(POS_STD * 10.0).items():
         assert summary.below > 0.85, name
         assert summary.mean < summary.lower, name
+
+
+# Student t 97.5% quantile with 2 degrees of freedom (table value 4.303).
+T_975_DF2 = 4.302652729911275
+
+
+def test_seed_mean_nees_hand_computed():
+    nees_per_seed = np.array(
+        [
+            [100.0, 1.0, 3.0],
+            [100.0, 2.0, 4.0],
+            [100.0, 3.0, 5.0],
+        ]
+    )
+    mask = np.array([False, True, True])  # the huge first step is excluded
+    # Per-seed time averages 2, 3, 4: mean 3, sample std 1, standard error 1 / sqrt(3).
+    half_width = T_975_DF2 / np.sqrt(3.0)
+
+    result = seed_mean_nees(nees_per_seed, dim=2, mask=mask)
+    assert result.mean == pytest.approx(3.0)
+    assert result.lower == pytest.approx(3.0 - half_width)
+    assert result.upper == pytest.approx(3.0 + half_width)
+    assert result.verdict == "consistent"  # 2 is inside [0.52, 5.48]
+
+    # The same interval judged against a larger expected value lies below it.
+    assert seed_mean_nees(nees_per_seed, dim=6, mask=mask).verdict == "underconfident"
+    # Ten times larger NEES: interval [5.2, 54.8] lies above 4.
+    assert seed_mean_nees(10.0 * nees_per_seed, dim=4, mask=mask).verdict == "overconfident"
+
+
+def test_seed_mean_nees_rejects_invalid_arguments():
+    values = np.ones((3, 4))
+    mask = np.ones(4, dtype=bool)
+    with pytest.raises(ValueError, match="n_seeds"):
+        seed_mean_nees(np.ones(4), dim=2, mask=mask)
+    with pytest.raises(ValueError, match="at least 2 seeds"):
+        seed_mean_nees(np.ones((1, 4)), dim=2, mask=mask)
+    with pytest.raises(ValueError, match="mask must have shape"):
+        seed_mean_nees(values, dim=2, mask=np.ones(3, dtype=bool))
+    with pytest.raises(ValueError, match="no steps"):
+        seed_mean_nees(values, dim=2, mask=np.zeros(4, dtype=bool))
+    with pytest.raises(ValueError, match="confidence"):
+        seed_mean_nees(values, dim=2, mask=mask, confidence=1.0)
+
+
+def seed_mean_tests(filter_pos_std: float):
+    trials = [linear_kf_nees(seed, filter_pos_std) for seed in range(N_SEEDS)]
+    dims = {"state": 4, "position": 2, "velocity": 2}
+    mask = np.ones(N_STEPS + 1, dtype=bool)
+    return {
+        name: seed_mean_nees(np.stack([t[name] for t in trials]), dim, mask)
+        for name, dim in dims.items()
+    }
+
+
+def test_honest_linear_filter_interval_contains_the_expected_value():
+    # Observed: state 4.22 [3.76, 4.67], position 2.16 [1.90, 2.42], velocity 2.17 [1.94, 2.41].
+    for (name, result), dim in zip(seed_mean_tests(POS_STD).items(), (4, 2, 2), strict=True):
+        assert result.lower < dim < result.upper, name
+        assert result.verdict == "consistent", name
+
+
+def test_overconfident_filter_interval_is_above_the_expected_value():
+    # The filter believes its measurements are 10x more precise than they are.
+    # Observed lower bounds: state 213, position 154, velocity 64.
+    for name, result in seed_mean_tests(POS_STD / 10.0).items():
+        assert result.verdict == "overconfident", name
+
+
+def test_underconfident_filter_interval_is_below_the_expected_value():
+    # The filter believes its measurements are 10x noisier than they are.
+    # Observed upper bounds: state 2.47, position 0.34, velocity 1.14.
+    for name, result in seed_mean_tests(POS_STD * 10.0).items():
+        assert result.verdict == "underconfident", name
