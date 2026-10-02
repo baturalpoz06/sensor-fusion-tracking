@@ -36,7 +36,6 @@ def test_one_visible_panel_per_metric_titled_and_labelled():
         METRIC_TITLES[n] for n in MttMetrics._fields
     ]
     assert all(ax.get_xlabel() == PARAMETER_LABELS["clutter_rate"] for ax in axes)
-    assert len(fig.axes) > len(axes)  # unused grid cells are hidden
 
 
 def test_each_panel_draws_the_seed_mean_and_its_confidence_band():
@@ -50,7 +49,8 @@ def test_each_panel_draws_the_seed_mean_and_its_confidence_band():
 
         # The band polygon must carry exactly the interval bounds.
         band_y = np.concatenate([p.vertices[:, 1] for p in ax.collections[0].get_paths()])
-        for bound in [i.lower for i in intervals] + [i.upper for i in intervals]:
+        bounds = [max(i.lower, 0.0) for i in intervals] + [i.upper for i in intervals]
+        for bound in bounds:
             assert np.isclose(band_y, bound).any()
         assert ax.get_ylim()[0] == 0.0
 
@@ -95,3 +95,23 @@ def test_importing_the_plot_module_does_not_import_matplotlib():
     code = "import sys, fusion.mtt_plots; print('matplotlib' in sys.modules)"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
+
+
+def test_the_band_is_clipped_at_zero_for_nonnegative_scores():
+    metrics = {name: values.copy() for name, values in make_result().metrics.items()}
+    metrics["id_switches"][1] = [0.0, 0.0, 0.0, 0.0, 3.0]  # interval reaches below zero
+    interval = seed_confidence_interval(metrics["id_switches"][1])
+    assert interval.lower < 0.0
+    fig = build_sweep_figure(SweepResult("pd", VALUES, metrics))
+    ax = visible_axes(fig)[list(metrics).index("id_switches")]
+    band_y = np.concatenate([p.vertices[:, 1] for p in ax.collections[0].get_paths()])
+    assert band_y.min() >= 0.0
+    assert np.isclose(band_y, interval.upper).any()
+
+
+def test_unused_grid_cells_are_hidden():
+    result = make_result()
+    metrics = {name: values for name, values in result.metrics.items() if name != "births_per_scan"}
+    fig = build_sweep_figure(SweepResult(result.parameter, result.values, metrics))
+    assert len(visible_axes(fig)) == len(metrics) == 7
+    assert len(fig.axes) == 8

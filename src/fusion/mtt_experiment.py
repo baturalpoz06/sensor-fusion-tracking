@@ -134,10 +134,12 @@ def clutter_per_gate(config: MttConfig, range_: float, coast_scans: int) -> floa
 
     Clutter is uniform in (range, bearing) with density rate / V, where V is the
     field of view area in that space (FieldOfView.measurement_volume). The gate
-    is the ellipse d^2 <= gamma in the innovation space with covariance S, whose
-    area is pi * gamma * sqrt(det S). Multiply the result by the clutter rate
-    for the expected count. The gate is not clipped at the field of view edges,
-    so near the inner and outer radius this slightly overestimates.
+    is the ellipse d^2 <= gamma in the innovation space with covariance S. Its
+    area is pi * gamma * sqrt(det S); where the ellipse sticks out of the
+    field of view in range (a track close to range_min or range_max) only the
+    part inside counts, which is computed in closed form from the chord width at
+    each range. The bearing limits of a partial sector are not clipped. Multiply
+    the result by the clutter rate for the expected count.
 
     Args:
         config: Experiment parameters (velocity prior, noise, dt, gate probability, field of view).
@@ -148,7 +150,22 @@ def clutter_per_gate(config: MttConfig, range_: float, coast_scans: int) -> floa
     model = RadarModel(config.radar_range_std, config.radar_bearing_std)
     S = innovation_covariance(tracker_filter.x, tracker_filter.P, model)  # noqa: N806
     gamma = gate_threshold(model.R.shape[0], config.gate_probability)
-    area = np.pi * gamma * np.sqrt(np.linalg.det(S))
+
+    # At range offset t * half (|t| <= 1) the ellipse is 2 * sqrt(gamma * det S / S_rr) *
+    # sqrt(1 - t^2) wide in bearing; integrate that over the part of it inside the field
+    # of view, with the antiderivative F(t) = (t * sqrt(1 - t^2) + arcsin t) / 2.
+    half = np.sqrt(gamma * S[0, 0])
+    centre = model.h(tracker_filter.x)[0]
+    t_low, t_high = np.clip(
+        [(config.fov.range_min - centre) / half, (config.fov.range_max - centre) / half], -1.0, 1.0
+    )
+
+    def antiderivative(t: float) -> float:
+        return 0.5 * (t * np.sqrt(1.0 - t * t) + np.arcsin(t))
+
+    area = (
+        2.0 * gamma * np.sqrt(np.linalg.det(S)) * (antiderivative(t_high) - antiderivative(t_low))
+    )
     return float(area / config.fov.measurement_volume)
 
 
@@ -160,9 +177,11 @@ def clutter_gate_report(
 ) -> list[str]:
     """Report lines with the expected clutter count in a tentative track's gate.
 
-    For every coasting time and clutter rate: the count at the given ranges and
-    its mean over a track range uniform in the field of view (clutter is uniform
-    in range too).
+    For every coasting time and clutter rate: the expected count at the given
+    ranges and its mean over a track range uniform in the field of view (clutter
+    is uniform in range too), followed by the probability that a gate holds at
+    least one clutter point, 1 - exp(-mean count), which is what matters when
+    the count is not small.
 
     Args:
         config: Experiment parameters.
@@ -187,8 +206,10 @@ def clutter_gate_report(
             cells = "  ".join(
                 f"r={r:>5.0f}: {rate * v:8.4f}" for r, v in zip(ranges, per_range, strict=True)
             )
+            mean_count = rate * mean_per_unit
             lines.append(
-                f"    lambda={rate:>5g}  {cells}  mean over r: {rate * mean_per_unit:8.4f}"
+                f"    lambda={rate:>5g}  {cells}  mean over r: {mean_count:8.4f}"
+                f"  P(>=1): {1.0 - np.exp(-mean_count):6.3f}"
             )
     return lines
 

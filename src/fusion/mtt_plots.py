@@ -13,18 +13,19 @@ from fusion.mtt_metrics import seed_confidence_interval
 
 METRIC_TITLES = {
     "position_rmse": "Position RMSE [m]",
-    "ghost_rate": "Ghost tracks per step",
+    "ghost_rate": "Ghost tracks per step (unmatched)",
     "missed_rate": "Missed-target rate",
     "confirmation_delay": "Confirmation delay [s]",
     "confirmed_fraction": "Targets ever confirmed",
-    "id_switches": "ID switches per run",
+    "false_track_rate": "False tracks per step (never matched)",
+    "id_switches": "ID switches per run (after burn-in)",
     "births_per_scan": "Track births per radar scan",
 }
 
 PARAMETER_LABELS = {
-    "clutter_rate": "Clutter rate, radar and camera [points per scan]",
-    "radar_clutter_rate": "Radar clutter rate [points per scan]",
-    "camera_clutter_rate": "Camera clutter rate [points per scan]",
+    "clutter_rate": "Clutter rate, radar and camera [points per scan of each sensor]",
+    "radar_clutter_rate": "Radar clutter rate [points per radar scan]",
+    "camera_clutter_rate": "Camera clutter rate [points per camera scan, one per step]",
     "pd": "Detection probability, radar and camera",
     "radar_pd": "Radar detection probability",
     "camera_pd": "Camera detection probability",
@@ -71,7 +72,8 @@ def build_sweep_figure(result: SweepResult, confidence: float = 0.95, title: str
 def _draw_panel(ax, result: SweepResult, name: str, confidence: float) -> None:
     intervals = [seed_confidence_interval(row, confidence) for row in result.metrics[name]]
     mean = np.array([i.mean for i in intervals])
-    lower = np.array([i.lower for i in intervals])
+    # The scores are non-negative: clip the band at zero instead of letting the axis cut it.
+    lower = np.maximum([i.lower for i in intervals], 0.0)
     upper = np.array([i.upper for i in intervals])
     x = result.values
 

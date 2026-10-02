@@ -7,13 +7,14 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from fusion.mtt_experiment import SweepResult
+from fusion.mtt_experiment import MttConfig, SweepResult
 from fusion.mtt_metrics import seed_confidence_interval
 
 # Metric name -> (column header, significant digits of the mean).
 COLUMNS = {
     "position_rmse": ("rmse [m]", 3),
     "ghost_rate": ("ghost/step", 3),
+    "false_track_rate": ("false/step", 3),
     "missed_rate": ("missed", 3),
     "confirmation_delay": ("delay [s]", 3),
     "confirmed_fraction": ("confirmed", 3),
@@ -24,12 +25,30 @@ COLUMNS = {
 # dominate the mean: metric name -> column header.
 MEDIAN_COLUMNS = {
     "position_rmse": "med rmse [m]",
+    "ghost_rate": "med ghost",
     "missed_rate": "med missed",
     "id_switches": "med id sw",
 }
 COLUMN_WIDTH = 23
 MEDIAN_WIDTH = 14
 VALID_WIDTH = 14
+
+
+def settings_caption(config: MttConfig) -> str:
+    """One line with the settings shared by all rows of a table.
+
+    The base clutter rates and detection probabilities are those of the config; the
+    parameter that a sweep varies overrides its base value in every row.
+    """
+    lifecycle = config.lifecycle
+    return (
+        f"match distance {config.match_distance:g} m (same at every row), "
+        f"{lifecycle.confirm_hits}-of-{lifecycle.confirm_window} confirmation, "
+        f"K={lifecycle.max_misses}, gate {100 * config.gate_probability:g}%, "
+        f"camera {'on' if config.use_camera else 'off'}; base values (the swept parameter "
+        f"replaces its own): radar Pd {config.radar_pd:g}, clutter {config.radar_clutter_rate:g}; "
+        f"camera Pd {config.camera_pd:g}, clutter {config.camera_clutter_rate:g}"
+    )
 
 
 def format_cell(values: np.ndarray, digits: int, confidence: float = 0.95) -> str:

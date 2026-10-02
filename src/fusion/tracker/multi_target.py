@@ -75,9 +75,10 @@ class MultiTargetTracker:
     tracks first and tentative tracks with the leftovers (a global assignment
     inside each group), update the lifecycle counters, and start a tentative
     track from every leftover radar measurement; then, if the camera scanned,
-    update the confirmed tracks whose bearing gates do not overlap another
-    track's gate. The camera is bearing-only, so it never starts a track and
-    never counts as a hit.
+    update the confirmed tracks whose bearing gates do not overlap the gate of
+    another confirmed track (tentative tracks are not updated by the camera,
+    so they neither receive nor block camera updates). The camera is bearing-only,
+    so it never starts a track and never counts as a hit.
 
     Attributes:
         camera_skipped: Camera updates skipped because bearing gates overlapped
@@ -251,7 +252,7 @@ class MultiTargetTracker:
             self.births += 1
 
     def _ambiguous_camera_tracks(self, tracks: list[Track]) -> set[int]:
-        """Indices of tracks whose bearing gate overlaps the gate of another track.
+        """Indices of tracks whose bearing gate overlaps the gate of another one in the list.
 
         Tracks i and j overlap if |wrap(theta_i - theta_j)| < sqrt(gamma) * (s_i + s_j),
         with s the std of each track's predicted bearing innovation.

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from fusion.mtt_experiment import SweepResult
+from fusion.mtt_experiment import MttConfig, SweepResult
 from fusion.mtt_metrics import MttMetrics, seed_confidence_interval
 from fusion.mtt_report import (
     COLUMNS,
@@ -11,6 +11,7 @@ from fusion.mtt_report import (
     format_cell,
     format_median,
     format_sweep_table,
+    settings_caption,
 )
 
 VALUES = np.array([0.0, 5.0, 10.0, 15.0])
@@ -79,3 +80,23 @@ def test_sweep_table_caption_and_row_labels():
     assert [line.split()[0] for line in lines[3:]] == labels
     with pytest.raises(ValueError, match="row labels"):
         format_sweep_table(result, row_labels=["only one"])
+
+
+def test_settings_caption_lists_the_shared_settings():
+    from dataclasses import replace
+
+    from fusion.tracker.track import LifecycleConfig
+
+    config = replace(
+        MttConfig(),
+        match_distance=150.0,
+        lifecycle=LifecycleConfig(2, 4, 3),
+        use_camera=False,
+        radar_pd=0.8,
+        camera_clutter_rate=7.0,
+    )
+    caption = settings_caption(config)
+    for text in ["150 m (same at every row)", "2-of-4", "K=3", "99%", "camera off"]:
+        assert text in caption
+    assert "radar Pd 0.8" in caption and "camera Pd 0.9, clutter 7" in caption
+    assert "replaces its own" in caption

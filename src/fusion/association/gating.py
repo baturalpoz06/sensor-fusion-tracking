@@ -68,7 +68,7 @@ def innovation(
     """Residual and covariance of measurement z against the estimate (x, P).
 
     Computed exactly as ExtendedKalmanFilter.update does: angle elements of the
-    residual are wrapped to (-pi, pi] before anything else uses them, so a
+    residual are wrapped to [-pi, pi] before anything else uses them, so a
     bearing on either side of the -x axis is not mistaken for a 2*pi jump.
 
     Raises:
@@ -105,8 +105,9 @@ class GatedCosts(NamedTuple):
     """Association costs of every track-measurement pair.
 
     Attributes:
-        cost: Shape (n_tracks, n_meas) cost d^2 + ln det S. Inf for a track that
-            could not be gated (too close to the sensor, S not positive definite).
+        cost: Shape (n_tracks, n_meas) cost d^2 + ln det S. Inf, or NaN for a
+            non-finite estimate, for a track that could not be gated (too close to the
+            sensor, S not positive definite); never in the gate then.
         in_gate: Shape (n_tracks, n_meas) boolean, True if d^2 <= threshold.
     """
 

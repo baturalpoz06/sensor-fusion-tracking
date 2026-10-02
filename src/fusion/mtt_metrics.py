@@ -18,15 +18,24 @@ class MttMetrics(NamedTuple):
     Attributes:
         position_rmse: Root mean square position error in meters over all matched
             (target, step) pairs; NaN if there are none.
-        ghost_rate: Mean number of confirmed tracks per step that match no target.
+        ghost_rate: Mean number of confirmed tracks per step that match no target
+            (farther than max_distance from every unclaimed target). This includes
+            tracks that follow a real target but are pulled off it, and duplicates.
         missed_rate: Share of (target, step) pairs inside the field of view that
-            have no matching confirmed track; NaN if no target is ever in view.
+            have no matching confirmed track; NaN if no target is ever in view. It
+            includes the time before a target's first confirmation when that comes
+            after the burn-in (at low detection probability), so read it together
+            with confirmation_delay.
         confirmation_delay: Mean over the targets that were ever matched of the
             time in seconds from the start to the first match (all steps count);
             NaN if no target was matched. Read it together with confirmed_fraction.
         confirmed_fraction: Share of targets that were matched at least once (all steps).
         id_switches: Number of times a target is matched to a different track id
             than the last one it was matched to, summed over targets.
+        false_track_rate: Mean number of confirmed tracks per step that are never
+            matched to any target during the whole run (clutter-born tracks). It is
+            at most ghost_rate; the difference is the off-target rate, tracks that
+            were on a target at some step but are unmatched at this one.
         births_per_scan: Diagnostic, tracks started per radar scan; NaN unless the
             experiment fills it from the tracker counters.
     """
@@ -37,6 +46,7 @@ class MttMetrics(NamedTuple):
     confirmation_delay: float
     confirmed_fraction: float
     id_switches: int
+    false_track_rate: float = float("nan")
     births_per_scan: float = float("nan")
 
 
@@ -103,6 +113,27 @@ def match_tracks(
             squared_error[target, k] = cost[target, track]
         n_matched[k] = len(result.pairs)
     return Matching(ids, squared_error, n_confirmed, n_matched)
+
+
+def false_track_counts(
+    history: Sequence[Sequence[TrackSnapshot]], matched_ids: set[int]
+) -> np.ndarray:
+    """Number of confirmed tracks per step whose id was never matched to a target.
+
+    Args:
+        history: n_steps lists of track snapshots.
+        matched_ids: Ids of the tracks that were matched to a target at some step.
+
+    Returns:
+        Shape (n_steps,) counts.
+    """
+    return np.array(
+        [
+            sum(s.status is TrackStatus.CONFIRMED and s.track_id not in matched_ids for s in step)
+            for step in history
+        ],
+        dtype=int,
+    )
 
 
 def count_id_switches(ids: np.ndarray) -> int:
@@ -172,6 +203,10 @@ def evaluate_mtt(
     counted = in_view & after
     missed_rate = float(np.mean(match.ids[counted] < 0)) if counted.any() else np.nan
 
+    matched_ids = {int(i) for i in np.unique(match.ids[match.ids >= 0])}
+    false_counts = false_track_counts(history, matched_ids)
+    false_track_rate = float(np.mean(false_counts[after])) if after.any() else np.nan
+
     delays = first_match_times(match.ids, dt)
     ever_matched = np.isfinite(delays)
     return MttMetrics(
@@ -181,6 +216,7 @@ def evaluate_mtt(
         float(np.mean(delays[ever_matched])) if ever_matched.any() else np.nan,
         float(np.mean(ever_matched)) if n_targets else np.nan,
         count_id_switches(match.ids[:, after]),
+        false_track_rate,
     )
 
 

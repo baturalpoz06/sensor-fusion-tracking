@@ -15,6 +15,8 @@ import argparse
 import time
 from pathlib import Path
 
+import numpy as np
+
 from fusion.mtt_experiment import (
     SCENARIOS,
     MttConfig,
@@ -23,13 +25,14 @@ from fusion.mtt_experiment import (
     compare_fusion,
     sweep,
 )
-from fusion.mtt_report import format_sweep_table
+from fusion.mtt_report import format_sweep_table, settings_caption
+from fusion.mtt_simulation import FieldOfView
 from fusion.tracker.track import LifecycleConfig
 
-# Radar clutter creates ghost tracks: with M-of-N confirmation the ghost rate stays at zero
-# up to a few points per scan and then rises steeply, so the grid is dense from 10 to 30.
-# Camera clutter never starts tracks and only disturbs the updates of confirmed tracks; the
-# effect of the camera clutter rate becomes clear only in the tens of points per scan.
+# Radar clutter starts false tracks (births from leftover measurements), so the grid is dense
+# from 10 to 30 points per scan where the false-track rate rises steeply. Camera clutter never
+# starts tracks but pulls the updates of confirmed tracks (already visible at a few points per
+# scan, one scan per step) and strongly so in the tens, so its grid reaches 100.
 DEFAULT_RADAR_CLUTTER_RATES = (0.0, 3.0, 5.0, 7.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0)
 DEFAULT_CAMERA_CLUTTER_RATES = (0.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0)
 DEFAULT_PDS = (0.6, 0.7, 0.8, 0.9, 1.0)
@@ -78,24 +81,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gate-probability", type=float, default=defaults.gate_probability)
     parser.add_argument("--match-distance", type=float, default=defaults.match_distance, help="[m]")
     parser.add_argument("--duration", type=float, default=defaults.duration, help="[s]")
+    parser.add_argument("--dt", type=float, default=defaults.dt, help="time step [s]")
+    parser.add_argument("--radar-every", type=int, default=defaults.radar_every, help="steps")
+    parser.add_argument("--range-std", type=float, default=defaults.radar_range_std, help="[m]")
+    parser.add_argument("--radar-bearing-std-deg", type=float, default=2.0, help="[deg]")
+    parser.add_argument("--camera-bearing-std-deg", type=float, default=0.1, help="[deg]")
+    parser.add_argument("--accel-std", type=float, default=defaults.accel_std, help="[m/s^2]")
+    parser.add_argument("--range-min", type=float, default=defaults.fov.range_min, help="[m]")
+    parser.add_argument("--range-max", type=float, default=defaults.fov.range_max, help="[m]")
     parser.add_argument("--burn-in", type=float, default=defaults.burn_in, help="[s]")
     parser.add_argument("--no-camera", action="store_true", help="radar-only tracker")
     parser.add_argument("--workers", type=int, default=1, help="worker processes")
     parser.add_argument("--out", type=Path, default=Path("results"), help="plot directory")
     parser.add_argument("--no-plots", action="store_true", help="print the tables only")
     return parser.parse_args()
-
-
-def settings_caption(config: MttConfig) -> str:
-    """Settings shared by every row of a table, printed above it."""
-    lifecycle = config.lifecycle
-    return (
-        f"match distance {config.match_distance:g} m (same at every row), "
-        f"{lifecycle.confirm_hits}-of-{lifecycle.confirm_window} confirmation, "
-        f"K={lifecycle.max_misses}, gate {100 * config.gate_probability:g}%, "
-        f"base radar Pd {config.radar_pd:g} / clutter {config.radar_clutter_rate:g}, "
-        f"camera Pd {config.camera_pd:g} / clutter {config.camera_clutter_rate:g}"
-    )
 
 
 def run_sweep(kind: str, config: MttConfig, args: argparse.Namespace, seeds: range) -> SweepResult:
@@ -139,7 +138,14 @@ def run_compare(config: MttConfig, args: argparse.Namespace, seeds: range) -> Sw
 def main() -> None:
     args = parse_args()
     config = MttConfig(
+        dt=args.dt,
         duration=args.duration,
+        radar_every=args.radar_every,
+        radar_range_std=args.range_std,
+        radar_bearing_std=float(np.deg2rad(args.radar_bearing_std_deg)),
+        camera_bearing_std=float(np.deg2rad(args.camera_bearing_std_deg)),
+        accel_std=args.accel_std,
+        fov=FieldOfView(range_min=args.range_min, range_max=args.range_max),
         radar_pd=args.radar_pd,
         camera_pd=args.camera_pd,
         radar_clutter_rate=args.radar_clutter_rate,
@@ -164,19 +170,26 @@ def main() -> None:
         f"deleted after more than {lifecycle.max_misses} consecutive misses; "
         f"gate {100 * config.gate_probability:g}%; match distance {config.match_distance:g} m"
     )
-    print(
-        "metrics (after burn-in): rmse = position error of matched confirmed tracks; ghost/step = "
-        "confirmed tracks without a\ntarget per step; missed = share of (target, step) pairs in "
-        "view without a confirmed track; delay = mean time to the\nfirst match; confirmed = share "
-        "of targets ever matched; id sw = identity changes per run; births/scan = tracks\nstarted "
-        "per radar scan (diagnostic). Cells are mean +- half-width of the 95% t interval across "
-        "seeds;\nthe 'med' columns are medians across seeds (rmse, missed and id switches are "
-        "heavy-tailed); valid seeds = seeds with a defined rmse / delay."
+    legend = (
+        "metrics (after burn-in): rmse = position error of matched confirmed tracks;",
+        "  ghost/step = confirmed tracks with no target within the match distance, per step",
+        "    (includes real tracks pulled off their target);",
+        "  false/step = confirmed tracks never matched to any target in the run (clutter-born);",
+        "  missed = share of (target, step) pairs in view without a confirmed track (includes the",
+        "    acquisition time when a target is first confirmed after the burn-in);",
+        "  delay = mean time to the first match; confirmed = share of targets ever matched;",
+        "  id sw = identity changes per run, counted after the burn-in;",
+        "  births/scan = tracks started per radar scan (diagnostic).",
+        "cells are mean +- half-width of the 95% t interval across seeds; 'med' columns are",
+        "medians across seeds (ghost/step is zero in most seeds and skewed; rmse, missed and",
+        "id sw less so); valid seeds = seeds with a defined rmse / delay.",
     )
+    for line in legend:
+        print(line)
 
     results = {}
     if "clutter" in args.sweeps:
-        # Ghosts come from radar clutter; a camera sweep keeps the radar rate at its base value.
+        # A camera sweep keeps the radar clutter rate at its base value; the report is about radar.
         swept_radar = args.sweep_sensors in ("both", "radar")
         rates = [r for r in (args.clutter_rates or DEFAULT_RADAR_CLUTTER_RATES) if r > 0.0]
         print()

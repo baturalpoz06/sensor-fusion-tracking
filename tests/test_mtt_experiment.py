@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import fusion.mtt_experiment as experiment
-from fusion.association.gating import gate_threshold, gated_costs
+from fusion.association.gating import gate_threshold, gated_costs, innovation_covariance
 from fusion.mtt_experiment import (
     SCENARIOS,
     SWEEP_PARAMETERS,
@@ -146,6 +146,34 @@ def test_clutter_per_gate_matches_a_monte_carlo_count_also_across_the_seam(beari
     assert measured == pytest.approx(expected, rel=0.1)
 
 
+@pytest.mark.parametrize(
+    ("range_", "coast"), [(60.0, 1), (2990.0, 1), (80.0, 3), (2900.0, 3)], ids=str
+)
+def test_clutter_per_gate_is_clipped_at_the_range_limits(range_, coast):
+    config = MttConfig()
+    tracker_filter = tentative_filter(config, range_, coast, bearing=np.pi - 0.01)
+    clipped = clutter_per_gate(config, range_, coast)
+    measured = monte_carlo_fraction(config, tracker_filter, 800_000, seed=5)
+    assert measured == pytest.approx(clipped, rel=0.12)
+
+    # The plain ellipse area would overshoot clearly: that is what the clipping fixes.
+    model = RadarModel(config.radar_range_std, config.radar_bearing_std)
+    S = innovation_covariance(tracker_filter.x, tracker_filter.P, model)  # noqa: N806
+    gamma = gate_threshold(2, config.gate_probability)
+    unclipped = np.pi * gamma * np.sqrt(np.linalg.det(S)) / config.fov.measurement_volume
+    assert unclipped > 1.15 * clipped
+
+
+def test_clutter_per_gate_equals_the_plain_ellipse_area_away_from_the_range_limits():
+    config = MttConfig()
+    tracker_filter = tentative_filter(config, 1500.0, 1)
+    model = RadarModel(config.radar_range_std, config.radar_bearing_std)
+    S = innovation_covariance(tracker_filter.x, tracker_filter.P, model)  # noqa: N806
+    gamma = gate_threshold(2, config.gate_probability)
+    plain = np.pi * gamma * np.sqrt(np.linalg.det(S)) / config.fov.measurement_volume
+    assert clutter_per_gate(config, 1500.0, 1) == pytest.approx(plain, rel=1e-12)
+
+
 def test_clutter_per_gate_grows_with_coasting_and_with_the_velocity_prior():
     config = MttConfig()
     values = [clutter_per_gate(config, 1500.0, n) for n in (1, 2, 3)]
@@ -182,6 +210,11 @@ def test_clutter_gate_report_lists_every_rate_and_coasting_time():
     assert "gamma=9.21" in lines[0] and "99%" in lines[0]
     expected = 5.0 * clutter_per_gate(config, 1500.0, 2)
     assert any(f"{expected:8.4f}" in line and "lambda=    5" in line for line in lines)
+    assert all("P(>=1)" in line for line in lines if "lambda=" in line)
+    mean_ranges = np.linspace(config.fov.range_min, config.fov.range_max, 60)
+    mean_count = 5.0 * np.mean([clutter_per_gate(config, r, 2) for r in mean_ranges])
+    expected_p = 1.0 - np.exp(-mean_count)
+    assert any(f"P(>=1): {expected_p:6.3f}" in line and "lambda=    5" in line for line in lines)
     first = [line for line in lines if "lambda=    1" in line][0]
     assert f"{clutter_per_gate(config, 500.0, 1):8.4f}" in first
 

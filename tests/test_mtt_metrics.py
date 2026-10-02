@@ -8,6 +8,7 @@ from fusion.mtt_metrics import (
     MttMetrics,
     count_id_switches,
     evaluate_mtt,
+    false_track_counts,
     first_match_times,
     match_tracks,
     seed_confidence_interval,
@@ -256,3 +257,55 @@ def test_too_few_valid_seeds_give_a_nan_band_instead_of_an_error(values, n_valid
 def test_seed_confidence_interval_rejects_an_invalid_confidence():
     with pytest.raises(ValueError, match="confidence"):
         seed_confidence_interval(np.array([1.0, 2.0]), confidence=1.0)
+
+
+# --- false tracks versus off-target tracks -------------------------------------------
+
+
+def test_false_track_counts_ignore_matched_ids_and_tentative_tracks():
+    history = [
+        [snapshot(1, (0.0, 0.0)), snapshot(2, (0.0, 0.0)), snapshot(3, (0.0, 0.0), TENTATIVE)],
+        [snapshot(2, (0.0, 0.0))],
+        [],
+    ]
+    np.testing.assert_array_equal(false_track_counts(history, {1}), [1, 1, 0])
+    np.testing.assert_array_equal(false_track_counts(history, {1, 2}), [0, 0, 0])
+
+
+def test_a_never_matched_far_track_is_both_a_ghost_and_a_false_track():
+    history = perfect_history(TWO)
+    for k in range(N_STEPS):
+        history[k].append(snapshot(99, (2000.0, 2000.0)))
+    metrics = evaluate(TWO, history)
+    assert metrics.ghost_rate == pytest.approx(1.0)
+    assert metrics.false_track_rate == pytest.approx(1.0)
+
+
+def test_a_track_pulled_off_its_target_is_a_ghost_but_not_a_false_track():
+    history = perfect_history(TWO, ids=[0, 1])
+    for k in range(20, N_STEPS):  # track 0 leaves target 0 by 300 m for the second half
+        history[k][0] = snapshot(0, TWO[0, k, :2] + np.array([300.0, 0.0]))
+    metrics = evaluate(TWO, history)
+    assert metrics.ghost_rate == pytest.approx(0.5)  # unmatched in 20 of 40 steps
+    assert metrics.missed_rate == pytest.approx(0.25)  # target 0 unmatched in 20 of 80 pairs
+    assert metrics.false_track_rate == 0.0  # it was on target 0 before
+    assert metrics.id_switches == 0
+
+
+def test_a_duplicate_track_next_to_a_target_is_a_false_track():
+    history = perfect_history(TWO, ids=[0, 1])
+    for k in range(N_STEPS):
+        history[k].append(snapshot(7, TWO[0, k, :2] + np.array([10.0, 0.0])))
+    metrics = evaluate(TWO, history)
+    # Track 0 is closer and claims target 0; track 7 never matches anything.
+    assert metrics.false_track_rate == pytest.approx(1.0)
+    assert metrics.ghost_rate == pytest.approx(1.0)
+    assert metrics.id_switches == 0
+
+
+def test_false_tracks_are_counted_only_after_the_burn_in():
+    history = perfect_history(TWO)
+    for k in range(10):
+        history[k].append(snapshot(99, (2000.0, 2000.0)))
+    assert evaluate(TWO, history, burn_in_steps=0).false_track_rate == pytest.approx(10 / N_STEPS)
+    assert evaluate(TWO, history, burn_in_steps=10).false_track_rate == 0.0

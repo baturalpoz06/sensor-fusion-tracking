@@ -398,5 +398,14 @@ def test_births_do_not_go_through_the_public_add_track_hook(monkeypatch):
     assert [t.track_id for t in tracker.tracks] == [0, 1]
 
 
-def test_add_track_documents_that_it_is_only_a_test_hook():
-    assert "tests and scenario set-up only" in MultiTargetTracker.add_track.__doc__
+def test_a_tentative_track_neither_receives_nor_blocks_camera_updates():
+    tracker = make_tracker(use_camera=True)
+    confirmed = tracker.add_track(at_bearing(1000.0, 0.0), tight(), CONFIRMED_STATE)
+    # A tentative track with an almost identical bearing: its gate overlaps the
+    # confirmed track's, but only confirmed tracks take part in the ambiguity check.
+    tentative = tracker.add_track(at_bearing(1500.0, 0.0033), tight())
+    x_confirmed, x_tentative = confirmed.filter.x.copy(), tentative.filter.x.copy()
+    tracker.step(None, np.array([[0.002]]))
+    assert not np.array_equal(confirmed.filter.x, x_confirmed)  # updated, not blocked
+    np.testing.assert_array_equal(tentative.filter.x, x_tentative)  # not updated
+    assert tracker.camera_skipped == 0
