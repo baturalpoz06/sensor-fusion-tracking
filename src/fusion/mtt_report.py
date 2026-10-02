@@ -27,7 +27,7 @@ MEDIAN_COLUMNS = {
     "missed_rate": "med missed",
     "id_switches": "med id sw",
 }
-COLUMN_WIDTH = 19
+COLUMN_WIDTH = 23
 MEDIAN_WIDTH = 14
 VALID_WIDTH = 14
 
