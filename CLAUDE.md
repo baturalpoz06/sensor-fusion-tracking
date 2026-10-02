@@ -1,8 +1,9 @@
 # Project conventions
 
 ## Language
-- All code, comments, docstrings, commit messages, and string literals in English
-- Explanations to the user in Turkish; important terms as English(Türkçe)
+## Language
+- All code, comments, docstrings, commit messages, README.md, and any other file in the repository: English only, with no Turkish words and no parenthetical translations
+- Chat explanations to the user: Turkish, with important terms as English(Türkçe). This format is for chat only and never goes into a file
 
 ## Structure
 - src/ layout, package name: fusion
