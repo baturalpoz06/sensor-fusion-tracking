@@ -14,9 +14,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+plot = [
+    "matplotlib>=3.8",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "matplotlib>=3.8",
 ]
 
 [tool.hatch.build.targets.wheel]
