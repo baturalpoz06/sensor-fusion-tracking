@@ -239,6 +239,33 @@ def _run_trial(task: tuple[np.ndarray, MttConfig, int]) -> MttMetrics:
     return run_mtt_trial(*task)
 
 
+def _run_points(
+    initial_states: np.ndarray,
+    points: Sequence[MttConfig],
+    seeds: Sequence[int],
+    workers: int,
+) -> dict[str, np.ndarray]:
+    """Metrics of every seed at every configuration: name -> (n_points, n_seeds) array."""
+    if len(points) == 0 or len(seeds) == 0:
+        raise ValueError("values and seeds must not be empty")
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+
+    tasks = [(initial_states, point, seed) for point in points for seed in seeds]
+    if workers == 1:
+        trials = [_run_trial(task) for task in tasks]
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            trials = list(pool.map(_run_trial, tasks))
+
+    metrics = {name: np.zeros((len(points), len(seeds))) for name in MttMetrics._fields}
+    for index, trial in enumerate(trials):
+        i, j = divmod(index, len(seeds))
+        for name, score in zip(MttMetrics._fields, trial, strict=True):
+            metrics[name][i, j] = score
+    return metrics
+
+
 def sweep(
     initial_states: np.ndarray,
     config: MttConfig,
@@ -252,6 +279,8 @@ def sweep(
     The seeds are shared by all values, so truth, target noise and detection
     uniforms are identical across the sweep (see simulate_mtt). Trials are
     independent and deterministic per seed, so the result does not depend on workers.
+    Everything except the swept fields, including match_distance, is the same at
+    every value.
 
     Args:
         initial_states: Shape (n_targets, 4) starting states.
@@ -266,25 +295,32 @@ def sweep(
     """
     if parameter not in SWEEP_PARAMETERS:
         raise ValueError(f"unknown parameter {parameter!r}, choose from {sorted(SWEEP_PARAMETERS)}")
-    if len(values) == 0 or len(seeds) == 0:
-        raise ValueError("values and seeds must not be empty")
-    if workers < 1:
-        raise ValueError(f"workers must be >= 1, got {workers}")
-
     points = [
         replace(config, **{name: float(value) for name in SWEEP_PARAMETERS[parameter]})
         for value in values
     ]
-    tasks = [(initial_states, point, seed) for point in points for seed in seeds]
-    if workers == 1:
-        trials = [_run_trial(task) for task in tasks]
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            trials = list(pool.map(_run_trial, tasks))
-
-    metrics = {name: np.zeros((len(values), len(seeds))) for name in MttMetrics._fields}
-    for index, trial in enumerate(trials):
-        i, j = divmod(index, len(seeds))
-        for name, score in zip(MttMetrics._fields, trial, strict=True):
-            metrics[name][i, j] = score
+    metrics = _run_points(initial_states, points, seeds, workers)
     return SweepResult(parameter, np.asarray(values, dtype=float), metrics)
+
+
+def compare_fusion(
+    initial_states: np.ndarray,
+    config: MttConfig,
+    seeds: Sequence[int],
+    workers: int = 1,
+) -> SweepResult:
+    """Score the radar-only tracker and the radar + camera tracker on the same seeds.
+
+    Both runs see identical simulations (the camera data exists either way); only
+    use_camera differs. The result is a two-point SweepResult over the parameter
+    "use_camera": value 0 is radar-only, value 1 is fused.
+
+    Args:
+        initial_states: Shape (n_targets, 4) starting states.
+        config: Parameters of both runs; its use_camera field is overridden.
+        seeds: Seeds of the trials.
+        workers: Number of worker processes; 1 runs in this process.
+    """
+    points = [replace(config, use_camera=False), replace(config, use_camera=True)]
+    metrics = _run_points(initial_states, points, seeds, workers)
+    return SweepResult("use_camera", np.array([0.0, 1.0]), metrics)

@@ -1,10 +1,17 @@
 """Tests for the sweep text report."""
 
 import numpy as np
+import pytest
 
 from fusion.mtt_experiment import SweepResult
 from fusion.mtt_metrics import MttMetrics, seed_confidence_interval
-from fusion.mtt_report import COLUMNS, format_cell, format_sweep_table
+from fusion.mtt_report import (
+    COLUMNS,
+    MEDIAN_COLUMNS,
+    format_cell,
+    format_median,
+    format_sweep_table,
+)
 
 VALUES = np.array([0.0, 5.0, 10.0, 15.0])
 
@@ -42,3 +49,33 @@ def test_sweep_table_has_a_row_per_value_and_reports_valid_seeds():
     assert lines[2].split()[-1] == "0/5" and "n/a" in lines[2]
     assert lines[4].split()[-1] == "5/3"
     assert [float(line.split()[0]) for line in lines[2:]] == list(VALUES)
+
+
+def test_format_median_skips_nan_and_marks_undefined():
+    assert format_median(np.array([1.0, np.nan, 5.0, 100.0])) == "5"
+    assert format_median(np.array([np.nan, np.nan])) == "n/a"
+    assert format_median(np.array([])) == "n/a"
+
+
+def test_sweep_table_adds_medians_of_the_heavy_tailed_metrics():
+    result = make_result()
+    metrics = {name: values.copy() for name, values in result.metrics.items()}
+    metrics["position_rmse"][1] = [2.0, 2.1, 1.9, 2.0, 80.0]  # one outlier seed
+    lines = format_sweep_table(SweepResult("clutter_rate", VALUES, metrics))
+    assert all(text in lines[0] for text in MEDIAN_COLUMNS.values())
+    row = lines[3]
+    assert f"{format_median(metrics['position_rmse'][1]):>14}" in row
+    assert format_median(metrics["position_rmse"][1]) == "2"
+    # The mean cell shows what the median does not: the outlier.
+    assert format_cell(metrics["position_rmse"][1], 3).startswith("17.6")
+
+
+def test_sweep_table_caption_and_row_labels():
+    result = make_result()
+    labels = ["radar-only", "fused", "a", "b"]
+    lines = format_sweep_table(result, caption="match distance 150 m", row_labels=labels)
+    assert lines[0] == "match distance 150 m"
+    assert len(lines) == 3 + len(VALUES)
+    assert [line.split()[0] for line in lines[3:]] == labels
+    with pytest.raises(ValueError, match="row labels"):
+        format_sweep_table(result, row_labels=["only one"])

@@ -125,7 +125,10 @@ class MultiTargetTracker:
         P: np.ndarray,  # noqa: N803 - standard notation
         lifecycle: Lifecycle | None = None,
     ) -> Track:
-        """Insert a track with the given estimate; used for births and to set up scenarios.
+        """Insert a track directly. For tests and scenario set-up only.
+
+        The tracker itself never calls this method: it starts tracks only from
+        unassigned radar measurements, through a private path with the same effect.
 
         Args:
             x: Shape (4,) initial state.
@@ -135,6 +138,14 @@ class MultiTargetTracker:
         Returns:
             The new track, with the next unused id (ids are never reused).
         """
+        return self._add_track(x, P, lifecycle)
+
+    def _add_track(
+        self,
+        x: np.ndarray,
+        P: np.ndarray,  # noqa: N803 - standard notation
+        lifecycle: Lifecycle | None = None,
+    ) -> Track:
         cfg = self.config
         track = Track(
             self._next_id,
@@ -236,7 +247,7 @@ class MultiTargetTracker:
             x0, p0 = radar_initial_estimate(
                 measurement, range_std, bearing_std, self.config.velocity_std
             )
-            self.add_track(x0, p0)
+            self._add_track(x0, p0)
             self.births += 1
 
     def _ambiguous_camera_tracks(self, tracks: list[Track]) -> set[int]:

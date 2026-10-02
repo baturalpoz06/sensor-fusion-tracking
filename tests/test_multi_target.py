@@ -386,3 +386,17 @@ def test_run_tracking_does_not_read_the_scan_origins():
         assert [s.track_id for s in sa] == [s.track_id for s in sb]
         for ta, tb in zip(sa, sb, strict=True):
             np.testing.assert_array_equal(ta.x, tb.x)
+
+
+def test_births_do_not_go_through_the_public_add_track_hook(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("add_track is for tests and scenario set-up only")
+
+    monkeypatch.setattr(MultiTargetTracker, "add_track", forbidden)
+    tracker = make_tracker()
+    tracker.step(np.array([[1000.0, 0.3], [2000.0, -1.0]]), None)
+    assert [t.track_id for t in tracker.tracks] == [0, 1]
+
+
+def test_add_track_documents_that_it_is_only_a_test_hook():
+    assert "tests and scenario set-up only" in MultiTargetTracker.add_track.__doc__

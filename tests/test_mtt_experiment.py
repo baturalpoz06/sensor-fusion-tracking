@@ -5,6 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+import fusion.mtt_experiment as experiment
 from fusion.association.gating import gate_threshold, gated_costs
 from fusion.mtt_experiment import (
     SCENARIOS,
@@ -12,6 +13,7 @@ from fusion.mtt_experiment import (
     MttConfig,
     clutter_gate_report,
     clutter_per_gate,
+    compare_fusion,
     run_mtt_trial,
     sweep,
     tentative_filter,
@@ -202,11 +204,56 @@ def test_sweep_is_reproducible():
         np.testing.assert_equal(a.metrics[name], b.metrics[name])
 
 
-def test_sweep_gives_the_same_result_with_worker_processes():
-    args = (SCENARIOS["separated"], SHORT, "radar_clutter_rate", [0.0, 4.0], [0, 1])
-    serial, parallel = sweep(*args), sweep(*args, workers=2)
+@pytest.mark.parametrize("workers", [2, 3])
+def test_sweep_gives_identical_results_with_one_and_with_several_workers(workers):
+    # 3 values x 2 seeds do not divide evenly among 2 or 3 workers' task queues.
+    config = replace(SHORT, radar_clutter_rate=3.0)
+    args = (SCENARIOS["crossing"], config, "radar_clutter_rate", [0.0, 4.0, 9.0], [0, 1])
+    serial, parallel = sweep(*args), sweep(*args, workers=workers)
+    np.testing.assert_array_equal(serial.values, parallel.values)
+    assert serial.parameter == parallel.parameter
     for name in MttMetrics._fields:
-        np.testing.assert_equal(serial.metrics[name], parallel.metrics[name])
+        np.testing.assert_array_equal(serial.metrics[name], parallel.metrics[name])
+    assert np.isfinite(serial.metrics["births_per_scan"]).all()
+
+
+def test_compare_fusion_scores_both_trackers_on_the_same_simulations():
+    config = replace(EASY, duration=20.0, burn_in=2.0, match_distance=150.0)
+    result = compare_fusion(SCENARIOS["separated"], config, [0, 1])
+    assert result.parameter == "use_camera"
+    np.testing.assert_array_equal(result.values, [0.0, 1.0])
+    assert all(m.shape == (2, 2) for m in result.metrics.values())
+    # Fused is more accurate than radar-only, and each row equals a direct trial.
+    assert (result.metrics["position_rmse"][1] < result.metrics["position_rmse"][0]).all()
+    for row, use_camera in enumerate([False, True]):
+        direct = run_mtt_trial(SCENARIOS["separated"], replace(config, use_camera=use_camera), 1)
+        np.testing.assert_equal(
+            [result.metrics[name][row, 1] for name in MttMetrics._fields], list(direct)
+        )
+    parallel = compare_fusion(SCENARIOS["separated"], config, [0, 1], workers=2)
+    for name in MttMetrics._fields:
+        np.testing.assert_array_equal(result.metrics[name], parallel.metrics[name])
+
+
+def test_compare_fusion_rejects_bad_arguments():
+    with pytest.raises(ValueError, match="empty"):
+        compare_fusion(SCENARIOS["separated"], SHORT, [])
+    with pytest.raises(ValueError, match="workers"):
+        compare_fusion(SCENARIOS["separated"], SHORT, [0], workers=0)
+
+
+def test_match_distance_is_identical_at_every_sweep_point(monkeypatch):
+    seen = []
+    original = experiment.run_mtt_trial
+
+    def spy(initial_states, point, seed):
+        seen.append(point.match_distance)
+        return original(initial_states, point, seed)
+
+    monkeypatch.setattr(experiment, "run_mtt_trial", spy)
+    config = replace(SHORT, match_distance=321.0, use_camera=False)
+    sweep(SCENARIOS["separated"], config, "pd", [0.7, 1.0], [0])
+    assert seen == [321.0, 321.0]
 
 
 def test_sweeping_pd_applies_to_both_sensors_and_changes_the_misses():

@@ -1,4 +1,9 @@
-"""Text report of a sweep: mean and confidence half-width of every metric per value."""
+"""Text tables of a sweep: mean, confidence half-width and median of the metrics per value.
+
+This module only formats numbers; it contains no prose about the results.
+"""
+
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -15,7 +20,15 @@ COLUMNS = {
     "id_switches": ("id sw", 3),
     "births_per_scan": ("births/scan", 3),
 }
+# Metrics that also get a median column, for heavy-tailed scores where a few seeds
+# dominate the mean: metric name -> column header.
+MEDIAN_COLUMNS = {
+    "position_rmse": "med rmse [m]",
+    "missed_rate": "med missed",
+    "id_switches": "med id sw",
+}
 COLUMN_WIDTH = 19
+MEDIAN_WIDTH = 14
 VALID_WIDTH = 14
 
 
@@ -33,35 +46,60 @@ def format_cell(values: np.ndarray, digits: int, confidence: float = 0.95) -> st
     return f"{interval.mean:.{digits}g} +- {half_width:.2g}"
 
 
+def format_median(values: np.ndarray, digits: int = 3) -> str:
+    """Median over the valid (non-NaN) seeds, or "n/a" if there is none."""
+    valid = np.asarray(values, dtype=float)
+    valid = valid[np.isfinite(valid)]
+    return f"{np.median(valid):.{digits}g}" if valid.size else "n/a"
+
+
 def format_sweep_table(
-    result: SweepResult, confidence: float = 0.95, value_label: str | None = None
+    result: SweepResult,
+    confidence: float = 0.95,
+    value_label: str | None = None,
+    caption: str | None = None,
+    row_labels: Sequence[str] | None = None,
 ) -> list[str]:
     """Table lines: one row per swept value, one column per metric.
 
-    The last column gives how many seeds were valid for the two metrics that can
-    be undefined (position error, confirmation delay) as "rmse/delay".
+    After the mean columns come the medians of the heavy-tailed metrics (position
+    error, missed rate, ID switches), then how many seeds were valid for the two
+    metrics that can be undefined (position error, confirmation delay) as "rmse/delay".
 
     Args:
         result: Sweep result from fusion.mtt_experiment.sweep.
         confidence: Coverage of the Student t interval across seeds.
         value_label: Header of the first column; defaults to the parameter name.
+        caption: Optional first line, e.g. the settings shared by all rows.
+        row_labels: Optional text for the first column in place of the values.
+
+    Raises:
+        ValueError: If row_labels does not have one entry per value.
     """
+    if row_labels is not None and len(row_labels) != len(result.values):
+        raise ValueError(f"need {len(result.values)} row labels, got {len(row_labels)}")
     label = value_label or result.parameter
-    header = f"{label:>20}" + "".join(
+    header = f"{label:>24}" + "".join(
         f"{COLUMNS[name][0]:>{COLUMN_WIDTH}}" for name in result.metrics if name in COLUMNS
     )
+    header += "".join(f"{text:>{MEDIAN_WIDTH}}" for text in MEDIAN_COLUMNS.values())
     header += f"{'valid seeds':>{VALID_WIDTH}}"
-    lines = [header, "-" * len(header)]
+    lines = [caption] if caption else []
+    lines += [header, "-" * len(header)]
     for i, value in enumerate(result.values):
         cells = "".join(
             f"{format_cell(result.metrics[name][i], COLUMNS[name][1], confidence):>{COLUMN_WIDTH}}"
             for name in result.metrics
             if name in COLUMNS
         )
+        medians = "".join(
+            f"{format_median(result.metrics[name][i]):>{MEDIAN_WIDTH}}" for name in MEDIAN_COLUMNS
+        )
         valid = {
             name: seed_confidence_interval(result.metrics[name][i], confidence).n_valid
             for name in ("position_rmse", "confirmation_delay")
         }
         counts = f"{valid['position_rmse']}/{valid['confirmation_delay']}"
-        lines.append(f"{value:>20g}{cells}{counts:>{VALID_WIDTH}}")
+        first = row_labels[i] if row_labels is not None else f"{value:g}"
+        lines.append(f"{first:>24}{cells}{medians}{counts:>{VALID_WIDTH}}")
     return lines

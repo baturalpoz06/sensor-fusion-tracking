@@ -6,7 +6,9 @@ Usage:
         [--out results] ...
 
 Each sweep runs the same seeds at every value and reports the mean over seeds with
-a 95% Student t interval; the plots show the same interval as a band.
+a 95% Student t interval and the median of the heavy-tailed metrics; the plots show
+the interval as a band. "--sweeps compare" scores the radar-only and the fused tracker
+on the same seeds instead.
 """
 
 import argparse
@@ -18,14 +20,18 @@ from fusion.mtt_experiment import (
     MttConfig,
     SweepResult,
     clutter_gate_report,
+    compare_fusion,
     sweep,
 )
 from fusion.mtt_report import format_sweep_table
 from fusion.tracker.track import LifecycleConfig
 
-# The clutter-rate grid is denser at the low end: with M-of-N confirmation the ghost
-# rate rises roughly with the cube of the rate, so a linear grid hides the onset.
-DEFAULT_CLUTTER_RATES = (0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, 30.0)
+# Radar clutter creates ghost tracks: with M-of-N confirmation the ghost rate stays at zero
+# up to a few points per scan and then rises steeply, so the grid is dense from 10 to 30.
+# Camera clutter never starts tracks and only disturbs the updates of confirmed tracks; the
+# effect of the camera clutter rate becomes clear only in the tens of points per scan.
+DEFAULT_RADAR_CLUTTER_RATES = (0.0, 3.0, 5.0, 7.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0)
+DEFAULT_CAMERA_CLUTTER_RATES = (0.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0)
 DEFAULT_PDS = (0.6, 0.7, 0.8, 0.9, 1.0)
 SENSOR_PREFIX = {"both": "", "radar": "radar_", "camera": "camera_"}
 VALUE_LABELS = {"clutter": "clutter rate [pts/scan]", "pd": "detection probability"}
@@ -36,14 +42,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--seeds", type=int, default=50, help="number of seeds (0..N-1)")
     parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="crossing")
-    parser.add_argument("--sweeps", nargs="+", choices=["clutter", "pd"], default=["clutter", "pd"])
+    parser.add_argument(
+        "--sweeps", nargs="+", choices=["clutter", "pd", "compare"], default=["clutter", "pd"]
+    )
     parser.add_argument(
         "--sweep-sensors",
         choices=sorted(SENSOR_PREFIX),
         default="both",
         help="which sensor's clutter rate / Pd is swept; the other keeps its base value",
     )
-    parser.add_argument("--clutter-rates", type=float, nargs="+", default=DEFAULT_CLUTTER_RATES)
+    parser.add_argument(
+        "--clutter-rates",
+        type=float,
+        nargs="+",
+        default=None,
+        help="clutter rates to sweep; default depends on --sweep-sensors (camera: its own grid)",
+    )
     parser.add_argument("--pds", type=float, nargs="+", default=DEFAULT_PDS)
     parser.add_argument("--radar-pd", type=float, default=defaults.radar_pd, help="base Pd")
     parser.add_argument("--camera-pd", type=float, default=defaults.camera_pd, help="base Pd")
@@ -72,16 +86,52 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def settings_caption(config: MttConfig) -> str:
+    """Settings shared by every row of a table, printed above it."""
+    lifecycle = config.lifecycle
+    return (
+        f"match distance {config.match_distance:g} m (same at every row), "
+        f"{lifecycle.confirm_hits}-of-{lifecycle.confirm_window} confirmation, "
+        f"K={lifecycle.max_misses}, gate {100 * config.gate_probability:g}%, "
+        f"base radar Pd {config.radar_pd:g} / clutter {config.radar_clutter_rate:g}, "
+        f"camera Pd {config.camera_pd:g} / clutter {config.camera_clutter_rate:g}"
+    )
+
+
 def run_sweep(kind: str, config: MttConfig, args: argparse.Namespace, seeds: range) -> SweepResult:
-    parameter = {"clutter": "clutter_rate", "pd": "pd"}[kind]
-    parameter = SENSOR_PREFIX[args.sweep_sensors] + parameter
-    values = args.clutter_rates if kind == "clutter" else args.pds
+    parameter = SENSOR_PREFIX[args.sweep_sensors] + {"clutter": "clutter_rate", "pd": "pd"}[kind]
+    if kind == "pd":
+        values = args.pds
+    elif args.clutter_rates is not None:
+        values = args.clutter_rates
+    elif args.sweep_sensors == "camera":
+        values = DEFAULT_CAMERA_CLUTTER_RATES
+    else:
+        values = DEFAULT_RADAR_CLUTTER_RATES
     print()
     print(f"=== sweep of {parameter} over {list(values)} ({len(seeds)} seeds each) ===")
     start = time.time()
     result = sweep(SCENARIOS[args.scenario], config, parameter, values, seeds, args.workers)
     print(f"({time.time() - start:.0f} s)")
-    for line in format_sweep_table(result, value_label=VALUE_LABELS[kind]):
+    for line in format_sweep_table(
+        result, value_label=VALUE_LABELS[kind], caption=settings_caption(config)
+    ):
+        print(line)
+    return result
+
+
+def run_compare(config: MttConfig, args: argparse.Namespace, seeds: range) -> SweepResult:
+    print()
+    print(f"=== radar-only vs fused tracker ({len(seeds)} seeds, identical simulations) ===")
+    start = time.time()
+    result = compare_fusion(SCENARIOS[args.scenario], config, seeds, args.workers)
+    print(f"({time.time() - start:.0f} s)")
+    for line in format_sweep_table(
+        result,
+        value_label="tracker",
+        caption=settings_caption(config),
+        row_labels=["radar-only", "fused"],
+    ):
         print(line)
     return result
 
@@ -120,18 +170,25 @@ def main() -> None:
         "view without a confirmed track; delay = mean time to the\nfirst match; confirmed = share "
         "of targets ever matched; id sw = identity changes per run; births/scan = tracks\nstarted "
         "per radar scan (diagnostic). Cells are mean +- half-width of the 95% t interval across "
-        "seeds."
+        "seeds;\nthe 'med' columns are medians across seeds (rmse, missed and id switches are "
+        "heavy-tailed); valid seeds = seeds with a defined rmse / delay."
     )
 
     results = {}
     if "clutter" in args.sweeps:
-        rates = [r for r in args.clutter_rates if r > 0.0]
+        # Ghosts come from radar clutter; a camera sweep keeps the radar rate at its base value.
+        swept_radar = args.sweep_sensors in ("both", "radar")
+        rates = [r for r in (args.clutter_rates or DEFAULT_RADAR_CLUTTER_RATES) if r > 0.0]
         print()
-        for line in clutter_gate_report(config, rates):
+        for line in clutter_gate_report(
+            config, rates if swept_radar else [config.radar_clutter_rate]
+        ):
             print(line)
         results["clutter"] = run_sweep("clutter", config, args, seeds)
     if "pd" in args.sweeps:
         results["pd"] = run_sweep("pd", config, args, seeds)
+    if "compare" in args.sweeps:
+        run_compare(config, args, seeds)
 
     if not args.no_plots:
         from fusion.mtt_plots import plot_sweep
