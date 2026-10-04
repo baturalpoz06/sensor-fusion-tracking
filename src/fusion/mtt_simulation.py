@@ -12,7 +12,9 @@ from fusion.sensors.radar import radar_measure
 
 # Independent random streams of one simulation. Each source of randomness has its
 # own stream, so changing one setting (e.g. the clutter rate) never shifts the
-# draws of another source (trajectories, target noise, detections).
+# draws of another source (trajectories, target noise, detections). New streams are
+# only ever appended: SeedSequence.spawn gives child i the same key for any number of
+# children, so the streams before them keep their draws.
 RNG_STREAMS = (
     "trajectory",
     "radar_noise",
@@ -23,6 +25,7 @@ RNG_STREAMS = (
     "camera_detection",
     "camera_clutter",
     "camera_shuffle",
+    "dropout",
 )
 
 
