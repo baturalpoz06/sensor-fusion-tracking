@@ -71,6 +71,7 @@ def match_tracks(
     truth: np.ndarray,
     history: Sequence[Sequence[TrackSnapshot]],
     max_distance: float,
+    alive: np.ndarray | None = None,
 ) -> Matching:
     """Match the confirmed tracks to the true targets at every step.
 
@@ -84,9 +85,13 @@ def match_tracks(
         truth: Shape (n_targets, n_steps, 4) true states.
         history: n_steps lists of track snapshots.
         max_distance: Largest position error in meters of a valid match.
+        alive: Optional shape (n_targets, n_steps) boolean mask of the targets that exist
+            at each step; a target that does not exist is not matched at that step (a
+            track still reported near it is then unexplained). None means all exist.
 
     Raises:
-        ValueError: If history does not have one entry per step, or max_distance <= 0.
+        ValueError: If history does not have one entry per step, max_distance <= 0, or
+            alive has the wrong shape.
     """
     truth = np.asarray(truth, dtype=float)
     n_targets, n_steps = truth.shape[:2]
@@ -94,6 +99,10 @@ def match_tracks(
         raise ValueError(f"history has {len(history)} steps, truth has {n_steps}")
     if max_distance <= 0.0:
         raise ValueError(f"max_distance must be > 0, got {max_distance}")
+    if alive is not None:
+        alive = np.asarray(alive, dtype=bool)
+        if alive.shape != (n_targets, n_steps):
+            raise ValueError(f"alive must have shape {(n_targets, n_steps)}, got {alive.shape}")
 
     ids = np.full((n_targets, n_steps), -1, dtype=int)
     squared_error = np.full((n_targets, n_steps), np.nan)
@@ -104,13 +113,16 @@ def match_tracks(
         n_confirmed[k] = len(confirmed)
         if not confirmed or n_targets == 0:
             continue
+        targets = np.arange(n_targets) if alive is None else np.flatnonzero(alive[:, k])
+        if targets.size == 0:
+            continue
         positions = np.array([s.x[:2] for s in confirmed])
-        diff = truth[:, k, None, :2] - positions[None, :, :]
+        diff = truth[targets, k, :2][:, None, :] - positions[None, :, :]
         cost = np.sum(diff**2, axis=2)
         result = gated_assignment(cost, cost <= max_distance**2)
-        for target, track in result.pairs:
-            ids[target, k] = confirmed[track].track_id
-            squared_error[target, k] = cost[target, track]
+        for row, track in result.pairs:
+            ids[targets[row], k] = confirmed[track].track_id
+            squared_error[targets[row], k] = cost[row, track]
         n_matched[k] = len(result.pairs)
     return Matching(ids, squared_error, n_confirmed, n_matched)
 
@@ -165,43 +177,68 @@ def first_match_times(ids: np.ndarray, dt: float) -> np.ndarray:
     return np.where(matched.any(axis=1), first * dt, np.nan)
 
 
-def evaluate_mtt(
+def window_scores(
+    match: Matching, in_view: np.ndarray, mask: np.ndarray
+) -> tuple[float, float, float]:
+    """Position error, ghost rate and missed rate over the steps selected by a mask.
+
+    The steps are selected by boolean-mask indexing on purpose: slicing the same steps or
+    filling the others with NaN sums in a different order and changes the last bit of the
+    result, which the Phase 6 regression test would catch.
+
+    Args:
+        match: Matching of the whole run.
+        in_view: Shape (n_targets, n_steps) targets that count as present: in the field of
+            view and, if targets can vanish, still existing.
+        mask: Shape (n_steps,) boolean selection of the steps.
+
+    Returns:
+        (position_rmse, ghost_rate, missed_rate), each NaN if the window has no data.
+    """
+    squared = match.squared_error[:, mask]
+    position_rmse = float(np.sqrt(np.nanmean(squared))) if np.isfinite(squared).any() else np.nan
+    ghost_rate = (
+        float(np.mean((match.n_confirmed - match.n_matched)[mask])) if mask.any() else np.nan
+    )
+    counted = in_view & mask
+    missed_rate = float(np.mean(match.ids[counted] < 0)) if counted.any() else np.nan
+    return position_rmse, ghost_rate, missed_rate
+
+
+def score_run(
+    match: Matching,
     truth: np.ndarray,
     history: Sequence[Sequence[TrackSnapshot]],
     *,
     dt: float,
     fov: FieldOfView,
-    max_distance: float,
     burn_in_steps: int,
+    alive: np.ndarray | None = None,
 ) -> MttMetrics:
-    """Score one run of the multi-target tracker against the truth.
+    """The Phase 6 scores of a run whose confirmed tracks were already matched to the truth.
 
     Args:
+        match: Result of match_tracks(truth, history, max_distance, alive).
         truth: Shape (n_targets, n_steps, 4) true states.
         history: n_steps lists of track snapshots.
         dt: Time step in seconds.
         fov: Field of view; targets outside it do not count as missed.
-        max_distance: Largest position error in meters of a valid match.
         burn_in_steps: Initial steps excluded from all metrics except the delay
             and the confirmed fraction.
+        alive: Optional shape (n_targets, n_steps) mask of existing targets; a target
+            that does not exist is never counted as missed.
 
     Returns:
         MttMetrics with births_per_scan left at NaN.
     """
     truth = np.asarray(truth, dtype=float)
     n_targets, n_steps = truth.shape[:2]
-    match = match_tracks(truth, history, max_distance)
     after = np.arange(n_steps) >= burn_in_steps
 
-    squared = match.squared_error[:, after]
-    position_rmse = float(np.sqrt(np.nanmean(squared))) if np.isfinite(squared).any() else np.nan
-    ghost_rate = (
-        float(np.mean((match.n_confirmed - match.n_matched)[after])) if after.any() else np.nan
-    )
-
     in_view = fov.contains(truth[:, :, :2].reshape(-1, 2)).reshape(n_targets, n_steps)
-    counted = in_view & after
-    missed_rate = float(np.mean(match.ids[counted] < 0)) if counted.any() else np.nan
+    if alive is not None:
+        in_view = in_view & alive
+    position_rmse, ghost_rate, missed_rate = window_scores(match, in_view, after)
 
     matched_ids = {int(i) for i in np.unique(match.ids[match.ids >= 0])}
     false_counts = false_track_counts(history, matched_ids)
@@ -217,6 +254,39 @@ def evaluate_mtt(
         float(np.mean(ever_matched)) if n_targets else np.nan,
         count_id_switches(match.ids[:, after]),
         false_track_rate,
+    )
+
+
+def evaluate_mtt(
+    truth: np.ndarray,
+    history: Sequence[Sequence[TrackSnapshot]],
+    *,
+    dt: float,
+    fov: FieldOfView,
+    max_distance: float,
+    burn_in_steps: int,
+    alive: np.ndarray | None = None,
+) -> MttMetrics:
+    """Score one run of the multi-target tracker against the truth.
+
+    Args:
+        truth: Shape (n_targets, n_steps, 4) true states.
+        history: n_steps lists of track snapshots.
+        dt: Time step in seconds.
+        fov: Field of view; targets outside it do not count as missed.
+        max_distance: Largest position error in meters of a valid match.
+        burn_in_steps: Initial steps excluded from all metrics except the delay
+            and the confirmed fraction.
+        alive: Optional shape (n_targets, n_steps) mask of existing targets (see
+            match_tracks); None means every target exists throughout.
+
+    Returns:
+        MttMetrics with births_per_scan left at NaN.
+    """
+    truth = np.asarray(truth, dtype=float)
+    match = match_tracks(truth, history, max_distance, alive)
+    return score_run(
+        match, truth, history, dt=dt, fov=fov, burn_in_steps=burn_in_steps, alive=alive
     )
 
 
