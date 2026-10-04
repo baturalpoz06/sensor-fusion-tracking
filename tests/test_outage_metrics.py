@@ -7,12 +7,13 @@ import numpy as np
 import pytest
 from scipy.stats import chi2
 
-from fusion.mtt_metrics import MttMetrics, evaluate_mtt, match_tracks
+from fusion.mtt_metrics import MttMetrics, evaluate_mtt, match_tracks, score_run, window_scores
 from fusion.mtt_simulation import FieldOfView
 from fusion.outage_metrics import (
     FIELDS,
     OUTLIER_QUANTILE,
     OutageMetrics,
+    anchor_ids,
     evaluate_outage,
     outage_windows,
     window_id_switches,
@@ -87,6 +88,7 @@ def perfect(truth, k, offset=(0.0, 0.0), ids=None):
 def test_outage_metrics_have_the_window_run_and_outage_fields():
     """Fails if a window or a Phase 6 metric is missing from the result."""
     assert OutageMetrics._fields == FIELDS
+    assert len(FIELDS) == 3 * 6 + len(MttMetrics._fields) + 13  # windows, run, outage scores
     for window in ("before", "during", "after"):
         assert f"{window}_position_rmse" in FIELDS and f"{window}_id_switches" in FIELDS
     assert all(f"run_{name}" in FIELDS for name in MttMetrics._fields)
@@ -403,3 +405,93 @@ def test_a_vanished_target_without_a_track_has_no_ghost_lifetime():
     result = score(truth, history, alive=alive, vanish={0: 6.0})
     assert np.isnan(result.ghost_lifetime) and np.isnan(result.ghost_censored)
     assert np.isnan(score(truth, history).ghost_lifetime)  # nothing vanishes
+
+
+# --- window length, anchors, eligibility ---------------------------------------------
+
+
+def test_after_length_is_the_seconds_of_the_after_window_actually_scored():
+    """Fails if a clipped after window is reported with its nominal length."""
+    truth = straight_truth(1)
+    history = build_history(lambda k: perfect(truth, k))
+    assert score(truth, history).after_length == pytest.approx(2.0)
+    clipped = score(truth, history, span=(8.0, 9.0), after_window=5.0)
+    assert clipped.after_length == pytest.approx(1.0)
+    assert score(truth, history, span=None).after_length == 0.0
+
+
+def test_anchor_ids_follow_the_last_step_before_the_outage():
+    """Fails if the anchor is taken at the wrong step, or untracked or vanished targets get one."""
+    ids = np.full((3, 6), -1)
+    ids[0, :] = 7
+    ids[1, 3] = 8  # matched at step 3 only
+    ids[2, 2] = 9
+    alive = np.ones((3, 6), dtype=bool)
+    assert anchor_ids(ids, alive, start_step=4) == {0: 7, 1: 8}  # step 3; target 2 unmatched there
+    alive[0, 3] = False  # the target no longer exists at that step
+    assert anchor_ids(ids, alive, start_step=4) == {1: 8}
+    assert anchor_ids(ids, alive, start_step=0) == {}  # nothing before the first step
+    assert anchor_ids(ids, alive, start_step=7) == {}  # beyond the run
+
+
+def test_window_scores_and_score_run_on_a_hand_built_matching():
+    """Fails if the shared scoring selects the wrong steps or changes the Phase 6 numbers."""
+    truth = straight_truth(1)
+    history = build_history(
+        lambda k: perfect(truth, k, offset=(3.0, 4.0) if k < 50 else (0.0, 0.0))
+    )
+    match = match_tracks(truth, history, 50.0)
+    in_view = np.ones((1, N), dtype=bool)
+    first_half = np.arange(N) < 50
+    rmse, ghost, missed = window_scores(match, in_view, first_half)
+    assert (rmse, ghost, missed) == (pytest.approx(5.0), 0.0, 0.0)
+    assert window_scores(match, in_view, ~first_half)[0] == pytest.approx(0.0, abs=1e-9)
+    assert all(np.isnan(v) for v in window_scores(match, in_view, np.zeros(N, dtype=bool)))
+    reference = evaluate_mtt(
+        truth, history, dt=DT, fov=FOV, max_distance=50.0, burn_in_steps=BURN_IN
+    )
+    scored = score_run(match, truth, history, dt=DT, fov=FOV, burn_in_steps=BURN_IN)
+    np.testing.assert_equal(tuple(scored), tuple(reference))
+
+
+def test_a_target_that_vanished_before_the_outage_end_is_not_eligible_for_reacquisition():
+    """Fails if a vanished target counts as never reacquired (the fraction would be 1/2).
+
+    Target 1 ceases to exist at step 40 inside the outage; its track lives on as a ghost,
+    which is unexplained after that step but is not a reacquisition failure.
+    """
+    truth = straight_truth(2)
+    alive = np.ones((2, N), dtype=bool)
+    alive[1, 40:] = False
+    history = build_history(lambda k: perfect(truth, k) if k < 30 else perfect(truth, k)[:1])
+    result = score(truth, history, alive=alive)
+    assert result.reacquired_fraction == 1.0 and result.identity_kept == 1.0
+
+
+def test_a_target_outside_the_field_of_view_at_the_outage_end_is_not_eligible():
+    """Fails if a target that left the field of view counts as never reacquired.
+
+    Target 1 is in view at step 29 (range 2989 m) and beyond the 3000 m limit at step 50
+    (3010 m); its track is lost during the outage.
+    """
+    truth = straight_truth(1)
+    leaving = np.array([[2960.0 + k, 0.0, 10.0, 0.0] for k in range(N)])  # 1 m per step
+    truth = np.stack([truth[0], leaving])
+    assert np.hypot(*truth[1, 29, :2]) < 3000.0 < np.hypot(*truth[1, 50, :2])  # precondition
+    history = build_history(lambda k: perfect(truth, k) if k < 30 else perfect(truth, k)[:1])
+    result = score(truth, history)
+    assert result.reacquired_fraction == 1.0 and result.identity_kept == 1.0
+
+
+def test_the_outage_nees_stops_when_the_target_ceases_to_exist():
+    """Fails if a vanished target's ghost track keeps contributing NEES samples.
+
+    The target vanishes at step 36, inside the radar-down steps 30..39; the track goes on
+    with its error, so the samples must stop after step 35 (6 samples, not 10).
+    """
+    truth = straight_truth(1)
+    alive = np.ones((1, N), dtype=bool)
+    alive[0, 36:] = False
+    history = build_history(lambda k: [error_track(truth, k, (2, 0, 0, 0.5))])
+    result = score(truth, history, alive=alive, radar_down=down_flags(30, 40))
+    assert result.nees_samples == 6 and result.nees_outage == pytest.approx(1.25)

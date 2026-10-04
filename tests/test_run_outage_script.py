@@ -61,7 +61,7 @@ def test_rows_are_labelled_with_the_policy_and_the_swept_value(all_experiments):
         "aware 4 s",
         "unaware 2 s off",
         "aware 30% off",
-        "coast 5 s, 12 s",
+        "coast 5 s, blackout 12 s",
         "aware, coast 30 s",
         "radar 4 s, aware freeze",
         "blackout 4 s, unaware",
@@ -111,3 +111,17 @@ def test_separated_tables_have_no_crossing_caveat():
     """Fails if the crossing caveat is printed for a scenario whose targets never cross."""
     out = run_script(*TINY, "--experiments", "a", "--scenario", "separated").stdout
     assert "scenario 'separated'" in out and "cross at about" not in out
+
+
+def test_the_legend_warns_about_the_reading_traps(all_experiments):
+    """Fails if the legend drops the notes that keep a table from being misread."""
+    for text in (
+        "rmse is taken over matched (target, step) pairs only",
+        "after len = seconds of the after window actually scored",
+        "seeds",  # bursts: seeds without any burst count as kept
+        "ghost life can be shorter than max coast",
+        "camera clutter in the widened gate of a coasting track resets its clock",
+        "NEES means are heavy-tailed",
+    ):
+        assert text in all_experiments, text
+    assert "after len [s]" in all_experiments and "med NEES bef" in all_experiments

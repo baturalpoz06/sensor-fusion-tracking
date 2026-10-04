@@ -12,6 +12,12 @@ deleted although they exist. Only radar-only outages longer than max_coast_time 
 targets are affected (in 'crossing', targets 0 and 1 pass within 10 m at about 30 s). The
 experiments keep the default max_coast_time above their radar-only outages, and the
 coast_deletions counter shows it: it must read 0 there.
+
+A second, similar effect: camera clutter that falls into the widened bearing gate of a coasting
+track also updates it and resets its clock, so with camera clutter the track of a vanished
+target outlives max_coast_time (measured: ghost lifetime 7.0 s and 20.9 s instead of 5 s and 10
+s at 5 camera clutter points per scan; radar clutter alone does not do it). Experiment f runs
+without clutter; no planned experiment has a vanished target with clutter.
 """
 
 from collections.abc import Sequence
@@ -132,6 +138,7 @@ def run_outage_trial(
     run = run_multi_target_tracking(
         dropped.sim, config.tracker_config(), radar_model, camera_model, dropped.radar_down
     )
+    scheduled = np.array([scan is not None for scan in dropped.sim.radar_scans])
     metrics = evaluate_outage(
         sim.truth,
         run.history,
@@ -142,13 +149,16 @@ def run_outage_trial(
         span=None if config.dropout is None else config.dropout.span,
         after_window=config.after_window,
         radar_down=dropped.radar_down,
-        scheduled=np.array([scan is not None for scan in dropped.sim.radar_scans]),
+        scheduled=scheduled,
         alive=alive,
         vanish=vanish or None,
     )
     tracker = run.tracker
+    # Per scheduled scan, lost scans included, so that the policies compare; without an outage
+    # this is the Phase 6 value births / radar scans processed.
+    births_per_scan = tracker.births / scheduled.sum() if scheduled.any() else np.nan
     return metrics._replace(
-        run_births_per_scan=tracker.births / tracker.radar_scans if tracker.radar_scans else np.nan,
+        run_births_per_scan=births_per_scan,
         coast_deletions=float(tracker.coast_deletions),
         tentative_drops=float(tracker.tentative_drops),
     )

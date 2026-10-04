@@ -92,6 +92,7 @@
   "births_per_scan"
  ],
  "numpy": "2.5.3",
+ "platform": "win32",
  "scipy": "1.18.1",
  "sweep_clutter_rate": {
   "births_per_scan": [

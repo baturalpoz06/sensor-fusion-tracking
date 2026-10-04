@@ -11,6 +11,12 @@ targets with close bearings can then coast without any update, and in a radar ou
 than max_coast_time both are deleted although they exist. The coast del column of the outage
 table counts these deletions; the experiments keep max_coast_time above their radar-only
 outages, so it must read 0 in those rows.
+
+A second, similar effect: camera clutter that falls into the widened bearing gate of a coasting
+track also updates it and resets its clock, so with camera clutter the track of a vanished
+target outlives max_coast_time (measured: ghost lifetime 7.0 s and 20.9 s instead of 5 s and 10
+s at 5 camera clutter points per scan; radar clutter alone does not do it). Experiment f runs
+without clutter; no planned experiment has a vanished target with clutter.
 """
 
 from collections.abc import Mapping, Sequence
@@ -48,6 +54,7 @@ OUTAGE_COLUMNS = {
     "ghost_censored": ("ghost cens", 3),
     "coast_deletions": ("coast del", 3),
     "tentative_drops": ("tent drops", 3),
+    "after_length": ("after len [s]", 3),
 }
 # Scores that also get a median column, for heavy-tailed values: name -> column header.
 WINDOW_MEDIANS = {
@@ -59,14 +66,15 @@ WINDOW_MEDIANS = {
 OUTAGE_MEDIANS = {
     "reacquisition_time": "med reacq [s]",
     "nees_outage": "med NEES",
+    "nees_before": "med NEES bef",
     "ghost_lifetime": "med ghost [s]",
 }
 
 
 CROSSING_CAVEAT = (
     "scenario crossing: targets 0 and 1 cross at about 30 s, so identity and reacquisition "
-    "scores of outages that cover that time mix coasting with the crossing (read identity "
-    "results from the separated scenario)"
+    "scores of outages that cover that time, or whose after window starts before it, mix "
+    "coasting with the crossing (read identity results from the separated scenario)"
 )
 
 
@@ -84,7 +92,8 @@ def outage_caption(config: OutageConfig, scenario: str | None = None) -> str:
     """
     caption = (
         f"{settings_caption(config)}; after window {config.after_window:g} s (clipped at the "
-        f"end of the run); aware tentatives {config.aware_tentatives} and max coast "
+        f"end of the run, see the after len column); aware tentatives "
+        f"{config.aware_tentatives} and max coast "
         f"{config.max_coast_time:g} s unless a row names them"
     )
     if scenario == "crossing":

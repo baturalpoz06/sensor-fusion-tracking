@@ -5,15 +5,18 @@ Usage:
 
 The fixture was recorded at commit 0067cac, before any Phase 7 change. It stores, for a grid
 of scenes, the Phase 6 metrics as exact float hex strings and a SHA-256 digest of every
-step's track ids, statuses, states and covariances, plus a small sweep and a fused vs
+step's track ids, statuses, states and covariances (with the numpy and scipy versions and
+the platform of the recording), plus a small sweep and a fused vs
 radar-only comparison. The regression test recomputes the same quantities with
-compute_golden() and demands exact equality, so any change to a code path shared with
-Phase 6 that alters even one bit is caught.
+compute_golden() and compares them (exactly where the environment matches, with a tight
+tolerance elsewhere), so any change to a code path shared with
+Phase 6 that alters a result is caught.
 """
 
 import argparse
 import hashlib
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -117,6 +120,7 @@ def compute_golden() -> dict:
     return {
         "numpy": np.__version__,
         "scipy": scipy.__version__,
+        "platform": sys.platform,
         "metric_fields": list(MttMetrics._fields),
         "trials": trials,
         **compute_sweeps(),

@@ -57,6 +57,7 @@ OUTAGE_FIELDS = (
     "ghost_censored",
     "coast_deletions",
     "tentative_drops",
+    "after_length",
 )
 FIELDS = (
     tuple(f"{window}_{metric}" for window in WINDOWS for metric in WINDOW_METRICS)
@@ -73,8 +74,10 @@ OutageMetrics.__doc__ = (
     "false_track_rate, missed_rate, id_switches, births_per_scan); run_ plus the Phase 6\n"
     "metrics of the whole run; the outage scores reacquisition_time, reacquired_fraction,\n"
     "reacquisition_time_censored, identity_kept, nees_outage, nees_samples,\n"
-    "nees_outlier_fraction, nees_before, ghost_lifetime, ghost_censored; and the tracker\n"
-    "counters coast_deletions and tentative_drops, which the caller fills in (NaN here)."
+    "nees_outlier_fraction, nees_before, ghost_lifetime, ghost_censored; after_length, the\n"
+    "seconds of the after window actually scored (it is clipped at the end of the run); and\n"
+    "the tracker counters coast_deletions and tentative_drops, which the caller fills in\n"
+    "(NaN here)."
 )
 
 
@@ -330,6 +333,7 @@ def evaluate_outage(
     present = [{s.track_id: s for s in step} for step in history]
 
     values: dict[str, float] = {name: np.nan for name in FIELDS}
+    values["after_length"] = float(np.sum(windows.after) * dt)
     for window, mask in windows.masks().items():
         rmse, ghost, missed = window_scores(match, in_view, mask)
         values[f"{window}_position_rmse"] = rmse

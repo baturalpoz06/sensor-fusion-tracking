@@ -321,3 +321,32 @@ def test_births_of_the_windows_add_up_to_the_births_of_the_tracker():
     assert run.tracker.births > 10  # precondition
     assert total == pytest.approx(run.tracker.births)
     assert any(s.status is TrackStatus.TENTATIVE for step in run.history for s in step)
+
+
+def test_the_dropout_windows_come_from_the_dropout_stream_of_the_seed(monkeypatch):
+    """Fails if the windows are drawn from a fixed or foreign generator instead of the seed's
+    "dropout" stream (every seed would then get the same burst pattern)."""
+    seen = []
+    original = MarkovBursts.windows
+
+    def spy(self, dt, rng=None):
+        seen.append(rng.bit_generator.state)
+        return original(self, dt, rng)
+
+    monkeypatch.setattr(MarkovBursts, "windows", spy)
+    config = OutageConfig(
+        duration=30.0, burn_in=2.0, dropout=MarkovBursts(RADAR, 8.0, 10.0, 0.3, 2.0)
+    )
+    for seed in (5, 6):
+        run_outage_trial(SEPARATED, config, seed)
+    assert seen == [make_mtt_rngs(seed)["dropout"].bit_generator.state for seed in (5, 6)]
+
+
+def test_births_per_scan_of_the_run_use_the_scheduled_scans_for_every_policy():
+    """Fails if the denominator is the number of scans processed: an aware tracker skips the
+    scans of an outage, which would inflate its rate against an unaware tracker."""
+    scheduled = int(SURE.duration / (SURE.radar_every * SURE.dt)) + 1
+    for policy in ("unaware", "aware"):
+        config = replace(SURE, outage_policy=policy, dropout=SingleOutage(RADAR, 20.0, 8.0))
+        births = run_outage_trial(SEPARATED, config, 0).run_births_per_scan * scheduled
+        assert births == pytest.approx(round(births), abs=1e-9) and births >= 3

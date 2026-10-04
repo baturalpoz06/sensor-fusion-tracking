@@ -10,7 +10,7 @@ import pytest
 
 from fusion.dropout import MarkovBursts, PeriodicFlicker, SingleOutage
 from fusion.mtt_experiment import SweepResult
-from fusion.mtt_report import format_cell, format_median
+from fusion.mtt_report import COLUMN_WIDTH, format_cell, format_median
 from fusion.outage_experiment import OutageConfig
 from fusion.outage_metrics import OutageMetrics
 from fusion.outage_report import (
@@ -53,7 +53,8 @@ def test_window_table_has_one_row_per_point_and_the_cells_of_that_window_only():
     assert format_cell(result.metrics["during_position_rmse"][0], 3).strip() in first
     assert format_cell(result.metrics["during_ghost_rate"][1], 3).strip() in second
     assert format_median(result.metrics["during_position_rmse"][0]) in first.split()
-    assert "9" not in first.split()[1:3]  # the after-window rmse (9) is not in the during table
+    first_cell = first[LABEL_WIDTH : LABEL_WIDTH + COLUMN_WIDTH]
+    assert "9" not in first_cell  # the after-window rmse (9) is not in the during table
 
 
 def test_window_table_counts_the_valid_seeds_and_marks_undefined_scores():
@@ -72,7 +73,8 @@ def test_outage_table_lists_every_outage_score_with_its_valid_counts():
     header = lines[0]
     for text, _ in OUTAGE_COLUMNS.values():
         assert text in header
-    assert "med reacq [s]" in header and "med NEES" in header
+    assert "med reacq [s]" in header and "med NEES" in header and "med NEES bef" in header
+    assert "after len [s]" in header
     assert lines[-2].split()[-1] == "3/3" and lines[-1].split()[-1] == "1/0"
 
 
@@ -105,6 +107,7 @@ def test_caption_gives_the_shared_settings_but_not_the_per_row_ones():
     config = OutageConfig(after_window=25.0, max_coast_time=12.0, aware_tentatives="freeze")
     caption = outage_caption(config)
     assert "after window 25 s" in caption and "max coast 12 s" in caption
+    assert "after len column" in caption
     assert "freeze" in caption and "unless a row names them" in caption
     assert "match distance" in caption  # the Phase 6 settings are included
     assert "unaware" not in caption and "span" not in caption
@@ -118,6 +121,7 @@ def test_the_crossing_caveat_is_in_the_caption_of_crossing_tables_only():
     config = OutageConfig()
     crossing = outage_caption(config, "crossing")
     assert "targets 0 and 1 cross at about 30 s" in crossing
+    assert "whose after window starts before it" in crossing
     assert "read identity results from the separated scenario" in crossing
     for other in ("separated", "vanishing", None):
         assert "cross at about" not in outage_caption(config, other)

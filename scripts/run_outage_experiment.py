@@ -23,6 +23,9 @@ the camera update that resets the coast clock is skipped for overlapping bearing
 planned experiment triggers it (a-d and g keep the default 15 s above their radar outages);
 the "coast deletion check" line after each outage table verifies it from the coast del counter.
 Identity results are cleanest in scenario "separated"; the crossing tables carry a caveat.
+Second effect of the same kind: camera clutter in the widened bearing gate of a coasting track
+resets its coast clock, so with camera clutter a ghost outlives max coast time (experiment f
+runs without clutter).
 
 Every experiment runs the same seeds at every row, so truth, noise, detections and clutter
 are identical and only the outage and the tracker's policy differ. Tables show the mean
@@ -95,7 +98,24 @@ LEGEND = (
     "  coast del / tent drops = tracks deleted for coasting too long / tentative tracks dropped.",
     "  known limitation: with close targets a radar outage longer than max coast deletes real",
     "  tracks (camera ambiguity keeps the coast clock running); the 'coast deletion check' line",
-    "  below each table verifies that no planned row triggers it.",
+    "  below each table verifies that no planned row triggers it. a second, similar effect:",
+    "  camera clutter in the widened gate of a coasting track resets its clock, so with camera",
+    "  clutter a ghost outlives max coast (experiment f runs clutter-free).",
+    "rmse is taken over matched (target, step) pairs only: a row that loses its tracks (high",
+    "  missed) can show a lower rmse; read it together with missed.",
+    "after len = seconds of the after window actually scored; it is clipped at the end of the",
+    "  run, so long outages have a shorter window and a higher after missed rate without the",
+    "  tracker being worse. for flicker and bursts the during window is the whole span and id",
+    "  kept / reacq compare the state at the span start with the state after the span; seeds",
+    "  without any burst count as kept, which dilutes low off fractions.",
+    "ghost life can be shorter than max coast when the outage ends first (the K-miss rule",
+    "  deletes the ghost then). experiment f always uses the scenario 'vanishing' (its tables",
+    "  are the same in the crossing and the separated run).",
+    "a cell 'x +- 0' means no variation across the valid seeds, not certainty. in experiment g",
+    "  ghost and false rates are dominated by a few seed events: compare drop and freeze with",
+    "  their intervals. NEES means are heavy-tailed (a track that was off its target at the",
+    "  outage start can give a huge value in one seed): read them with med NEES and NEES",
+    "  outliers. camera outages (b) leave reacq, id kept and NEES neutral by design.",
     "cells are mean +- half-width of the 95% t interval across seeds over the seeds where the",
     "  score is defined; 'med' columns are medians; valid seeds = seeds with a defined",
     "  rmse / missed (window tables) or reacq / NEES (outage table).",
@@ -196,8 +216,18 @@ def parse_args() -> argparse.Namespace:
     scene.add_argument("--dt", type=float, default=defaults.dt, help="time step [s]")
     scene.add_argument("--radar-every", type=int, default=defaults.radar_every, help="steps")
     scene.add_argument("--range-std", type=float, default=defaults.radar_range_std, help="[m]")
-    scene.add_argument("--radar-bearing-std-deg", type=float, default=2.0, help="[deg]")
-    scene.add_argument("--camera-bearing-std-deg", type=float, default=0.1, help="[deg]")
+    scene.add_argument(
+        "--radar-bearing-std-deg",
+        type=float,
+        default=float(np.rad2deg(defaults.radar_bearing_std)),
+        help="[deg]",
+    )
+    scene.add_argument(
+        "--camera-bearing-std-deg",
+        type=float,
+        default=float(np.rad2deg(defaults.camera_bearing_std)),
+        help="[deg]",
+    )
     scene.add_argument("--accel-std", type=float, default=defaults.accel_std, help="[m/s^2]")
     scene.add_argument("--range-min", type=float, default=defaults.fov.range_min, help="[m]")
     scene.add_argument("--range-max", type=float, default=defaults.fov.range_max, help="[m]")
@@ -298,7 +328,9 @@ def build_experiments(args: argparse.Namespace, base: OutageConfig) -> list[Expe
                 args.coast_durations,
             )
             rows += [
-                Row(f"coast {coast:g} s, {d:g} s", point, float(d), f"coast {coast:g} s")
+                Row(
+                    f"coast {coast:g} s, blackout {d:g} s", point, float(d), f"coast {coast:g} s"
+                )
                 for point, d in zip(points, args.coast_durations, strict=True)
             ]
         title = "aware tracker, max coasting time against the blackout duration"
