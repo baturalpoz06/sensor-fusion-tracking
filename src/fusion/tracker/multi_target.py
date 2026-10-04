@@ -1,5 +1,6 @@
 """Multi-target tracker: gated global association, track birth and lifecycle."""
 
+import math
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -8,6 +9,7 @@ import numpy as np
 from fusion.angles import wrap_angle
 from fusion.association.assignment import gated_assignment
 from fusion.association.gating import gate_threshold, gated_costs, innovation_covariance
+from fusion.dropout import STEP_TOLERANCE
 from fusion.filters.ekf import ExtendedKalmanFilter
 from fusion.mtt_simulation import MttSimulation
 from fusion.sensors.base import MIN_RANGE, MeasurementModel
@@ -15,10 +17,17 @@ from fusion.sensors.camera import CameraModel
 from fusion.sensors.radar import RadarModel, radar_initial_estimate
 from fusion.tracker.track import Lifecycle, LifecycleConfig, Track, TrackStatus, advance
 
+OUTAGE_POLICIES = ("unaware", "aware")
+TENTATIVE_POLICIES = ("drop", "freeze")
+
 
 @dataclass(frozen=True)
 class TrackerConfig:
     """Parameters of the multi-target tracker.
+
+    The last three fields only matter for a radar outage that the tracker is told about
+    (step(..., radar_down=True)) and only if the policy is "aware"; with the defaults and
+    no outage the tracker behaves exactly as without them.
 
     Attributes:
         dt: Time step in seconds.
@@ -29,6 +38,15 @@ class TrackerConfig:
             nor updated, and a measurement below which does not start a track.
         lifecycle: M-of-N confirmation and K-miss deletion parameters.
         use_camera: Whether camera scans update confirmed tracks.
+        outage_policy: "unaware" treats a radar outage like any other missing data: the
+            scan it is given (an empty one at a scheduled scan step) counts as a miss for
+            every track. "aware" knows the radar is down: the lifecycle counters are
+            frozen, no scan is processed, no track is born and the tracks coast.
+        aware_tentatives: What an aware tracker does with tentative tracks during a radar
+            outage: "drop" deletes them, "freeze" freezes their counters like those of
+            confirmed tracks.
+        max_coast_time: Seconds without any measurement update after which an aware
+            tracker deletes a track during a radar outage (at least dt).
     """
 
     dt: float
@@ -38,8 +56,25 @@ class TrackerConfig:
     min_range: float = 50.0
     lifecycle: LifecycleConfig = field(default_factory=LifecycleConfig)
     use_camera: bool = True
+    outage_policy: str = "unaware"
+    aware_tentatives: str = "drop"
+    max_coast_time: float = 15.0
+
+    @property
+    def max_coast_steps(self) -> int:
+        """max_coast_time in steps: a track is deleted after more coasting steps than this."""
+        return math.floor(self.max_coast_time / self.dt + STEP_TOLERANCE)
 
     def __post_init__(self) -> None:
+        if self.outage_policy not in OUTAGE_POLICIES:
+            raise ValueError(
+                f"outage_policy must be one of {OUTAGE_POLICIES}, got {self.outage_policy!r}"
+            )
+        if self.aware_tentatives not in TENTATIVE_POLICIES:
+            raise ValueError(
+                f"aware_tentatives must be one of {TENTATIVE_POLICIES}, "
+                f"got {self.aware_tentatives!r}"
+            )
         if self.dt <= 0.0:
             raise ValueError(f"dt must be > 0, got {self.dt}")
         if self.accel_std < 0.0:
@@ -50,6 +85,10 @@ class TrackerConfig:
             raise ValueError(f"gate_probability must be in (0, 1), got {self.gate_probability}")
         if self.min_range < 0.0:
             raise ValueError(f"min_range must be >= 0, got {self.min_range}")
+        if self.max_coast_time < self.dt:
+            raise ValueError(
+                f"max_coast_time must be >= dt, got {self.max_coast_time} < {self.dt}"
+            )
 
 
 class TrackSnapshot(NamedTuple):
@@ -80,11 +119,19 @@ class MultiTargetTracker:
     so they neither receive nor block camera updates). The camera is bearing-only,
     so it never starts a track and never counts as a hit.
 
+    With the "aware" outage policy and a step flagged radar_down, the radar is not
+    processed at all: the tracks only coast (predict, plus camera updates), the lifecycle
+    counters stay frozen and nothing is born. Afterwards tentative tracks are deleted
+    (aware_tentatives="drop") and every track that has gone more than max_coast_time
+    without any measurement update is deleted. These deletions happen only on such steps.
+
     Attributes:
         camera_skipped: Camera updates skipped because bearing gates overlapped
             (counted per track and per camera scan that had measurements).
         births: Number of tracks started so far.
-        radar_scans: Number of radar scans processed so far.
+        radar_scans: Number of radar scans processed so far (none during an aware outage).
+        coast_deletions: Tracks deleted for coasting longer than max_coast_time.
+        tentative_drops: Tentative tracks deleted at the start of an aware outage step.
     """
 
     def __init__(
@@ -114,6 +161,8 @@ class MultiTargetTracker:
         self.camera_skipped = 0
         self.births = 0
         self.radar_scans = 0
+        self.coast_deletions = 0
+        self.tentative_drops = 0
 
     @property
     def tracks(self) -> list[Track]:
@@ -157,7 +206,13 @@ class MultiTargetTracker:
         self._tracks.append(track)
         return track
 
-    def step(self, radar_z: np.ndarray | None, camera_z: np.ndarray | None) -> list[TrackSnapshot]:
+    def step(
+        self,
+        radar_z: np.ndarray | None,
+        camera_z: np.ndarray | None,
+        *,
+        radar_down: bool = False,
+    ) -> list[TrackSnapshot]:
         """Advance the tracker by one time step.
 
         Args:
@@ -166,22 +221,32 @@ class MultiTargetTracker:
                 a scan without detections: every track registers a miss.
             camera_z: Shape (m, 1) camera measurements [bearing], or None if the
                 camera did not scan. Ignored if use_camera is False.
+            radar_down: Whether the radar is known to be down at this step (scheduled
+                scan step or not). Only the "aware" outage policy reads it; an "unaware"
+                tracker processes radar_z as given.
 
         Returns:
             Snapshots of all live tracks after the step.
 
         Raises:
-            ValueError: If a scan does not have shape (m, d) for its sensor.
+            ValueError: If a scan does not have shape (m, d) for its sensor, or if an
+                aware tracker is told the radar is down but is given radar measurements.
         """
         radar = self._as_scan(radar_z, self._radar_model)
         camera = self._as_scan(camera_z, self._camera_model) if self.config.use_camera else None
+        aware_outage = radar_down and self.config.outage_policy == "aware"
+        if aware_outage and radar is not None and len(radar) > 0:
+            raise ValueError("the radar is down, but radar measurements were given")
 
         for track in self._tracks:
             track.filter.predict()
-        if radar is not None:
+            track.coast_steps += 1
+        if radar is not None and not aware_outage:
             self._radar_scan(radar)
         if camera is not None:
             self._camera_scan(camera)
+        if aware_outage:
+            self._end_of_outage_step()
         return [
             TrackSnapshot(t.track_id, t.status, t.filter.x.copy(), t.filter.P.copy())
             for t in self._tracks
@@ -221,9 +286,30 @@ class MultiTargetTracker:
         hits = set()
         for row, col in assignment.pairs:
             tracks[row].filter.update(z[columns[col]], model)
+            tracks[row].coast_steps = 0
             free[columns[col]] = False
             hits.add(tracks[row].track_id)
         return hits
+
+    def _end_of_outage_step(self) -> None:
+        """Delete what an aware tracker gives up on during a radar outage step.
+
+        Runs after the camera update of the step, so a camera update at this step has
+        already reset the coast clock of its track. Tentative tracks go first (when they
+        are dropped), then every track with more than max_coast_steps steps without any
+        measurement update.
+        """
+        drop_tentative = self.config.aware_tentatives == "drop"
+        limit = self.config.max_coast_steps
+        kept = []
+        for track in self._tracks:
+            if drop_tentative and track.status is TrackStatus.TENTATIVE:
+                self.tentative_drops += 1
+            elif track.coast_steps > limit:
+                self.coast_deletions += 1
+            else:
+                kept.append(track)
+        self._tracks = kept
 
     def _radar_scan(self, z: np.ndarray) -> None:
         self.radar_scans += 1
@@ -304,6 +390,7 @@ def run_multi_target_tracking(
     config: TrackerConfig,
     radar_model: RadarModel,
     camera_model: CameraModel | None,
+    radar_down: np.ndarray | None = None,
 ) -> TrackerRun:
     """Run the tracker over every step of a simulation.
 
@@ -312,17 +399,30 @@ def run_multi_target_tracking(
         config: Tracker parameters.
         radar_model: Radar measurement model.
         camera_model: Camera measurement model; may be None if the camera is unused.
+        radar_down: Shape (n_steps,) boolean, True at the steps in which the radar is known
+            to be down (see MultiTargetTracker.step); None means no outage.
 
     Returns:
         TrackerRun with the per-step snapshots and the final tracker.
+
+    Raises:
+        ValueError: If radar_down does not have one entry per step.
     """
+    n_steps = len(sim.radar_scans)
+    if radar_down is None:
+        radar_down = np.zeros(n_steps, dtype=bool)
+    elif np.shape(radar_down) != (n_steps,):
+        raise ValueError(f"radar_down must have shape ({n_steps},), got {np.shape(radar_down)}")
     tracker = MultiTargetTracker(config, radar_model, camera_model)
     history = []
-    for radar_scan, camera_scan in zip(sim.radar_scans, sim.camera_scans, strict=True):
+    for radar_scan, camera_scan, down in zip(
+        sim.radar_scans, sim.camera_scans, radar_down, strict=True
+    ):
         history.append(
             tracker.step(
                 None if radar_scan is None else radar_scan.z,
                 camera_scan.z,
+                radar_down=bool(down),
             )
         )
     return TrackerRun(history, tracker)

@@ -111,11 +111,14 @@ class Track:
         track_id: Unique identifier, never reused.
         filter: EKF holding the state estimate and covariance.
         lifecycle: Current lifecycle counters.
+        coast_steps: Steps since the last measurement update of any sensor (zero at birth).
+            Only the aware outage policy acts on it.
     """
 
     track_id: int
     filter: ExtendedKalmanFilter
     lifecycle: Lifecycle
+    coast_steps: int = 0
 
     @property
     def status(self) -> TrackStatus:
