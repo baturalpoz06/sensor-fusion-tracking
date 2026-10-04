@@ -1,6 +1,6 @@
 """Multi-target tracking experiment: scenarios, trials and parameter sweeps."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import NamedTuple
@@ -265,8 +265,14 @@ def _run_points(
     points: Sequence[MttConfig],
     seeds: Sequence[int],
     workers: int,
+    trial: Callable[[tuple], tuple] = _run_trial,
+    fields: Sequence[str] = MttMetrics._fields,
 ) -> dict[str, np.ndarray]:
-    """Metrics of every seed at every configuration: name -> (n_points, n_seeds) array."""
+    """Metrics of every seed at every configuration: name -> (n_points, n_seeds) array.
+
+    trial maps one (initial_states, config, seed) task to a tuple of scores named by fields;
+    it must be a module-level function so that worker processes can import it.
+    """
     if len(points) == 0 or len(seeds) == 0:
         raise ValueError("values and seeds must not be empty")
     if workers < 1:
@@ -274,15 +280,15 @@ def _run_points(
 
     tasks = [(initial_states, point, seed) for point in points for seed in seeds]
     if workers == 1:
-        trials = [_run_trial(task) for task in tasks]
+        trials = [trial(task) for task in tasks]
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
-            trials = list(pool.map(_run_trial, tasks))
+            trials = list(pool.map(trial, tasks))
 
-    metrics = {name: np.zeros((len(points), len(seeds))) for name in MttMetrics._fields}
-    for index, trial in enumerate(trials):
+    metrics = {name: np.zeros((len(points), len(seeds))) for name in fields}
+    for index, result in enumerate(trials):
         i, j = divmod(index, len(seeds))
-        for name, score in zip(MttMetrics._fields, trial, strict=True):
+        for name, score in zip(fields, result, strict=True):
             metrics[name][i, j] = score
     return metrics
 
