@@ -17,6 +17,13 @@ Experiments (clean baseline: no clutter, Pd 0.9, outage from --outage-start):
     g  realistic run with clutter (--realistic-rate) at radar and total outages,
        unaware, aware dropping tentative tracks and aware freezing them
 
+Known limitation: with close targets (the crossing at about 30 s in scenario "crossing") a
+radar outage longer than --max-coast-time deletes real tracks in the aware tracker, because
+the camera update that resets the coast clock is skipped for overlapping bearing gates. No
+planned experiment triggers it (a-d and g keep the default 15 s above their radar outages);
+the "coast deletion check" line after each outage table verifies it from the coast del counter.
+Identity results are cleanest in scenario "separated"; the crossing tables carry a caveat.
+
 Every experiment runs the same seeds at every row, so truth, noise, detections and clutter
 are identical and only the outage and the tracker's policy differ. Tables show the mean
 over seeds with a 95% Student t interval, and medians of the heavy-tailed scores.
@@ -47,6 +54,7 @@ from fusion.outage_experiment import (
 )
 from fusion.outage_metrics import WINDOWS
 from fusion.outage_report import (
+    format_coast_check,
     format_outage_table,
     format_window_table,
     outage_caption,
@@ -85,6 +93,9 @@ LEGEND = (
     "  outage, on its radar-down steps (ideal = 4, the state dimension; read with the NEES",
     "  samples and the before value); ghost life = seconds a vanished target's track survives;",
     "  coast del / tent drops = tracks deleted for coasting too long / tentative tracks dropped.",
+    "  known limitation: with close targets a radar outage longer than max coast deletes real",
+    "  tracks (camera ambiguity keeps the coast clock running); the 'coast deletion check' line",
+    "  below each table verifies that no planned row triggers it.",
     "cells are mean +- half-width of the 95% t interval across seeds over the seeds where the",
     "  score is defined; 'med' columns are medians; valid seeds = seeds with a defined",
     "  rmse / missed (window tables) or reacq / NEES (outage table).",
@@ -354,7 +365,7 @@ def run_experiment(experiment: Experiment, args: argparse.Namespace, seeds: rang
     )
     print(f"({time.time() - start:.0f} s)")
     labels = [row.label for row in experiment.rows]
-    caption = outage_caption(experiment.rows[0].config)
+    caption = outage_caption(experiment.rows[0].config, experiment.scenario)
     for window in WINDOWS:
         print()
         print(f"window: {window}")
@@ -365,6 +376,8 @@ def run_experiment(experiment: Experiment, args: argparse.Namespace, seeds: rang
     print()
     print("outage scores")
     for line in format_outage_table(result, labels):
+        print(line)
+    for line in format_coast_check([row.config for row in experiment.rows], result, labels):
         print(line)
     return result
 

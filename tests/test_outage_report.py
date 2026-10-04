@@ -3,9 +3,12 @@
 Each test docstring names the condition that makes it fail without the feature.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
+from fusion.dropout import MarkovBursts, PeriodicFlicker, SingleOutage
 from fusion.mtt_experiment import SweepResult
 from fusion.mtt_report import format_cell, format_median
 from fusion.outage_experiment import OutageConfig
@@ -13,8 +16,10 @@ from fusion.outage_metrics import OutageMetrics
 from fusion.outage_report import (
     LABEL_WIDTH,
     OUTAGE_COLUMNS,
+    format_coast_check,
     format_outage_table,
     format_window_table,
+    longest_outage,
     outage_caption,
     select_rows,
 )
@@ -103,3 +108,52 @@ def test_caption_gives_the_shared_settings_but_not_the_per_row_ones():
     assert "freeze" in caption and "unless a row names them" in caption
     assert "match distance" in caption  # the Phase 6 settings are included
     assert "unaware" not in caption and "span" not in caption
+
+
+# --- known limitation: coast deletions, crossing caveat ------------------------------
+
+
+def test_the_crossing_caveat_is_in_the_caption_of_crossing_tables_only():
+    """Fails if a table of the crossing scenario hides that its targets cross inside outages."""
+    config = OutageConfig()
+    crossing = outage_caption(config, "crossing")
+    assert "targets 0 and 1 cross at about 30 s" in crossing
+    assert "read identity results from the separated scenario" in crossing
+    for other in ("separated", "vanishing", None):
+        assert "cross at about" not in outage_caption(config, other)
+
+
+def test_the_longest_continuous_outage_of_each_specification():
+    """Fails if the threshold of the coast check uses the span of a flicker, not its off time."""
+    radar = ("radar",)
+    base = OutageConfig()
+    assert longest_outage(base) == 0.0
+    assert longest_outage(replace(base, dropout=SingleOutage(radar, 20.0, 6.0))) == 6.0
+    flicker = PeriodicFlicker(radar, 20.0, 30.0, 10.0, 3.0)
+    assert longest_outage(replace(base, dropout=flicker)) == 3.0
+    bursts = MarkovBursts(radar, 20.0, 30.0, 0.2, 2.0)
+    assert longest_outage(replace(base, dropout=bursts)) == 30.0
+
+
+def test_the_coast_check_flags_deletions_only_where_none_are_planned():
+    """Fails if a deletion in a row without a planned one goes unreported, or if rows where
+    deletions are the point (limit below the outage) or unaware rows are flagged."""
+    radar = ("radar",)
+    base = OutageConfig(max_coast_time=15.0)
+    aware = replace(base, outage_policy="aware")
+    configs = [
+        replace(aware, dropout=SingleOutage(radar, 20.0, 4.0)),  # checked
+        replace(aware, dropout=SingleOutage(radar, 20.0, 20.0)),  # limit below the outage
+        replace(base, dropout=SingleOutage(radar, 20.0, 4.0)),  # unaware
+        replace(aware, dropout=SingleOutage(radar, 20.0, 8.0)),  # checked
+    ]
+    labels = ["aware 4 s", "aware 20 s", "unaware 4 s", "aware 8 s"]
+    counts = np.array([[0, 0, 0], [3, 3, 3], [0, 0, 0], [0, 1, 0]], dtype=float)
+    result = SweepResult("x", np.arange(4.0), {"coast_deletions": counts})
+
+    clean = format_coast_check(configs[:3], result, labels[:3])
+    assert len(clean) == 1 and "1 aware rows" in clean[0] and clean[0].endswith("all 0")
+
+    flagged = format_coast_check(configs, result, labels)
+    assert "2 aware rows" in flagged[0] and "UNEXPECTED" in flagged[0]
+    assert flagged[1:] == ["  aware 8 s: 1 deletions"]

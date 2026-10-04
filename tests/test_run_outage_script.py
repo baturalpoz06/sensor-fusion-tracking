@@ -93,3 +93,21 @@ def test_an_outage_that_runs_to_the_end_of_the_run_is_refused():
     """Fails if a configuration without an after window is silently run."""
     result = run_script(*TINY, "--experiments", "a", "--durations", "25", check=False)
     assert result.returncode != 0 and "must end before the run does" in result.stderr
+
+
+def test_every_table_set_ends_with_the_coast_deletion_check_and_crossing_tables_carry_the_caveat(
+    all_experiments,
+):
+    """Fails if the check is not printed, flags a planned experiment, or a caveat is lost."""
+    lines = all_experiments.splitlines()
+    checks = [line for line in lines if line.startswith("coast deletion check")]
+    assert len(checks) == 8
+    assert not any("UNEXPECTED" in line for line in lines)
+    assert all_experiments.count("scenario crossing: targets 0 and 1 cross at about 30 s") == 7
+    assert "known limitation: with close targets" in all_experiments  # in the legend
+
+
+def test_separated_tables_have_no_crossing_caveat():
+    """Fails if the crossing caveat is printed for a scenario whose targets never cross."""
+    out = run_script(*TINY, "--experiments", "a", "--scenario", "separated").stdout
+    assert "scenario 'separated'" in out and "cross at about" not in out

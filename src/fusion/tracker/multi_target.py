@@ -48,7 +48,10 @@ class TrackerConfig:
         max_coast_time: Seconds without any measurement update after which an aware
             tracker deletes a track during a radar outage (finite, at least dt). Tracks
             without a camera update go a whole radar period between radar updates even
-            when nothing is wrong, so keep it above that period.
+            when nothing is wrong, so keep it above that period. Known limitation: the
+            camera update that resets a track's clock is skipped when the bearing gates of
+            two confirmed tracks overlap, so two close real targets can both be deleted
+            in a radar outage longer than this.
     """
 
     dt: float

@@ -3,6 +3,15 @@
 A trial simulates a scene exactly as the Phase 6 experiment does, optionally removes
 targets (they cease to exist), silences sensors in their outage windows (masking the
 generated scans) and scores the tracker per window around the outage.
+
+Known limitation: an aware tracker's coast clock counts steps since the last measurement update
+of any sensor, and the camera update of a track is skipped when its bearing gate overlaps the
+gate of another confirmed track (camera ambiguity). Two real targets with close bearings can
+therefore coast without any update; in a radar outage longer than max_coast_time both are then
+deleted although they exist. Only radar-only outages longer than max_coast_time with close
+targets are affected (in 'crossing', targets 0 and 1 pass within 10 m at about 30 s). The
+experiments keep the default max_coast_time above their radar-only outages, and the
+coast_deletions counter shows it: it must read 0 there.
 """
 
 from collections.abc import Sequence
@@ -49,7 +58,10 @@ class OutageConfig(MttConfig):
         outage_policy: "unaware" or "aware" (TrackerConfig.outage_policy).
         aware_tentatives: "drop" or "freeze" (TrackerConfig.aware_tentatives).
         max_coast_time: Seconds without a measurement update after which an aware tracker
-            deletes a track during a radar outage.
+            deletes a track during a radar outage. Known limitation: with close targets a
+            radar outage longer than this deletes real tracks, because the camera update
+            that would reset the clock is skipped for overlapping bearing gates (see the
+            module docstring).
         after_window: Length in seconds of the window after the outage that is scored.
         vanish: (target index, time in seconds) pairs: the target ceases to exist at that
             time (its detections stop; its truth is still simulated but not scored).

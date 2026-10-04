@@ -3,12 +3,21 @@
 One table per window (before, during, after the outage) with the Phase 6 scores, and one
 table with the outage scores (reacquisition, identity, NEES, ghost lifetime, counters).
 This module only formats numbers; it contains no prose about the results.
+
+Known limitation (see format_coast_check): an aware tracker's coast clock counts steps since
+the last measurement update of any sensor, and the camera update of a track is skipped when
+its bearing gate overlaps the gate of another confirmed track (camera ambiguity). Two real
+targets with close bearings can then coast without any update, and in a radar outage longer
+than max_coast_time both are deleted although they exist. The coast del column of the outage
+table counts these deletions; the experiments keep max_coast_time above their radar-only
+outages, so it must read 0 in those rows.
 """
 
 from collections.abc import Mapping, Sequence
 
 import numpy as np
 
+from fusion.dropout import MarkovBursts, PeriodicFlicker, SingleOutage
 from fusion.mtt_experiment import SweepResult
 from fusion.mtt_metrics import seed_confidence_interval
 from fusion.mtt_report import (
@@ -54,18 +63,87 @@ OUTAGE_MEDIANS = {
 }
 
 
-def outage_caption(config: OutageConfig) -> str:
+CROSSING_CAVEAT = (
+    "scenario crossing: targets 0 and 1 cross at about 30 s, so identity and reacquisition "
+    "scores of outages that cover that time mix coasting with the crossing (read identity "
+    "results from the separated scenario)"
+)
+
+
+def outage_caption(config: OutageConfig, scenario: str | None = None) -> str:
     """One line with the settings shared by all rows of an outage table.
 
     The outage itself and the tracker policy differ between rows and are named in the row
     labels; the line gives the settings that do not (and the defaults that a row may
-    override).
+    override). For the crossing scenario it adds the caveat that the targets cross inside
+    long outages.
+
+    Args:
+        config: Configuration of any row (for the shared settings).
+        scenario: Name of the scenario of the table.
     """
-    return (
+    caption = (
         f"{settings_caption(config)}; after window {config.after_window:g} s (clipped at the "
         f"end of the run); aware tentatives {config.aware_tentatives} and max coast "
         f"{config.max_coast_time:g} s unless a row names them"
     )
+    if scenario == "crossing":
+        caption += f"; {CROSSING_CAVEAT}"
+    return caption
+
+
+def longest_outage(config: OutageConfig) -> float:
+    """Longest continuous outage in seconds that a configuration can contain.
+
+    A single outage: its duration; periodic flicker: the off time; random bursts: the whole
+    span (a burst can in principle last that long).
+    """
+    spec = config.dropout
+    if spec is None:
+        return 0.0
+    if isinstance(spec, SingleOutage):
+        return spec.duration
+    if isinstance(spec, PeriodicFlicker):
+        return spec.off_time
+    if isinstance(spec, MarkovBursts):
+        return spec.span_length
+    raise ValueError(f"unknown dropout specification {spec!r}")
+
+
+def format_coast_check(
+    configs: Sequence[OutageConfig], result: SweepResult, row_labels: Sequence[str]
+) -> list[str]:
+    """Report lines checking the coast deletion counter where no deletion is planned.
+
+    An aware row whose max coast time is at least its longest continuous outage should
+    delete nothing for coasting: tracks in a radar-only outage keep being updated by the
+    camera, and in a blackout none coasts longer than the outage. A deletion there would be
+    the known limitation described in the module docstring. Rows with a shorter limit, where
+    deletions are the point of the experiment, are not checked.
+
+    Args:
+        configs: Configuration of each row.
+        result: Sweep result of the rows.
+        row_labels: Text of each row.
+
+    Returns:
+        One summary line, followed by one line per row with unexpected deletions.
+    """
+    checked = [
+        i
+        for i, config in enumerate(configs)
+        if config.outage_policy == "aware" and config.max_coast_time >= longest_outage(config)
+    ]
+    totals = {i: float(np.nansum(result.metrics["coast_deletions"][i])) for i in checked}
+    unexpected = [i for i, total in totals.items() if total > 0.0]
+    n_seeds = result.metrics["coast_deletions"].shape[1]
+    verdict = "all 0" if not unexpected else "UNEXPECTED deletions"
+    lines = [
+        f"coast deletion check: {len(checked)} aware rows with max coast >= longest outage "
+        f"(no deletion planned), summed over {n_seeds} seeds: {verdict}"
+    ]
+    lines += [f"  {row_labels[i]}: {totals[i]:g} deletions" for i in unexpected]
+    return lines
 
 
 def _format_table(
