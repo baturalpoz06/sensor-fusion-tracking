@@ -46,7 +46,9 @@ class TrackerConfig:
             outage: "drop" deletes them, "freeze" freezes their counters like those of
             confirmed tracks.
         max_coast_time: Seconds without any measurement update after which an aware
-            tracker deletes a track during a radar outage (at least dt).
+            tracker deletes a track during a radar outage (finite, at least dt). Tracks
+            without a camera update go a whole radar period between radar updates even
+            when nothing is wrong, so keep it above that period.
     """
 
     dt: float
@@ -85,9 +87,9 @@ class TrackerConfig:
             raise ValueError(f"gate_probability must be in (0, 1), got {self.gate_probability}")
         if self.min_range < 0.0:
             raise ValueError(f"min_range must be >= 0, got {self.min_range}")
-        if self.max_coast_time < self.dt:
+        if not math.isfinite(self.max_coast_time) or self.max_coast_time < self.dt:
             raise ValueError(
-                f"max_coast_time must be >= dt, got {self.max_coast_time} < {self.dt}"
+                f"max_coast_time must be finite and >= dt, got {self.max_coast_time} (dt {self.dt})"
             )
 
 

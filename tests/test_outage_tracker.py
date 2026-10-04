@@ -4,7 +4,6 @@ Each test docstring names the condition that makes it fail without the feature.
 """
 
 import copy
-import itertools
 from dataclasses import replace
 
 import numpy as np
@@ -66,10 +65,12 @@ def test_outage_defaults_leave_the_tracker_unaware_and_coasting_for_fifteen_seco
         {"max_coast_time": 0.0},
         {"max_coast_time": -1.0},
         {"max_coast_time": DT / 2},
+        {"max_coast_time": float("inf")},
+        {"max_coast_time": float("nan")},
     ],
 )
 def test_invalid_outage_settings_are_rejected(kwargs):
-    """Fails if a typo in a policy name or a coast time below one step is accepted."""
+    """Fails if a typo in a policy name, a coast time below one step, or inf / nan is accepted."""
     with pytest.raises(ValueError):
         make_config(**kwargs)
 
@@ -249,10 +250,10 @@ class Reference:
                 self.coast_deletions += 1
 
 
-def explore(tracker, reference, depth, trail, seen):
+def explore(tracker, reference, depth, trail, seen, events=EVENTS):
     """Check every event sequence up to the depth; returns the number of sequences checked."""
     checked = 0
-    for event in EVENTS:
+    for event in events:
         branch, expected = copy.deepcopy(tracker), reference.clone()
         radar_z, camera_z, down = step_arguments(event)
         branch.step(radar_z, camera_z, radar_down=down)
@@ -273,7 +274,7 @@ def explore(tracker, reference, depth, trail, seen):
 
         checked += 1
         if depth > 1:
-            checked += explore(branch, expected, depth - 1, where, seen)
+            checked += explore(branch, expected, depth - 1, where, seen, events)
     return checked
 
 
@@ -311,10 +312,35 @@ def test_every_event_sequence_matches_the_reference(initial, policy, tentatives,
     assert seen["births"] > 0
 
 
-def test_the_reference_agrees_with_itself_on_the_event_alphabet():
-    """Fails if the oracle's event list and the sequence count drift apart (a vacuous oracle)."""
-    assert len(set(EVENTS)) == len(EVENTS) == 6
-    assert len(list(itertools.product(EVENTS, repeat=DEPTH))) == 6**DEPTH
+LONG_EVENTS = "HMD"
+LONG_DEPTH = 6
+LONG_POLICIES = [("unaware", "drop", 100), ("aware", "drop", 3), ("aware", "freeze", 3)]
+
+
+@pytest.mark.parametrize("initial", INITIAL_STATES)
+@pytest.mark.parametrize(("policy", "tentatives", "coast_steps"), LONG_POLICIES, ids=str)
+def test_long_outage_sequences_match_the_reference(initial, policy, tentatives, coast_steps):
+    """Oracle over sequences of six hits, misses and lost scans.
+
+    Fails if a rule only breaks late: counters drifting during a long outage, a coast limit
+    that is reached after several lost scans in a row, or a rebirth after a long gap.
+    """
+    config = make_config(
+        lifecycle=LIFECYCLE,
+        outage_policy=policy,
+        aware_tentatives=tentatives,
+        max_coast_time=coast_steps * DT,
+    )
+    tracker = MultiTargetTracker(config, RADAR, CAMERA)
+    tracker.add_track(stationary(), tight(), INITIAL_STATES[initial])
+    seen = {"coast_deletions": 0, "tentative_drops": 0, "births": 0}
+    reference = Reference(config, INITIAL_STATES[initial])
+
+    checked = explore(tracker, reference, LONG_DEPTH, "", seen, LONG_EVENTS)
+
+    assert checked == sum(len(LONG_EVENTS) ** n for n in range(1, LONG_DEPTH + 1))
+    if policy == "aware" and INITIAL_STATES[initial].status is CONFIRMED:
+        assert seen["coast_deletions"] > 0 or seen["tentative_drops"] > 0  # the rules were reached
 
 
 # --- runner --------------------------------------------------------------------------
