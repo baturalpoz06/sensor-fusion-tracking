@@ -203,3 +203,20 @@ def test_the_legend_warns_about_the_reading_traps_and_the_pilot_banner_says_no_c
     ):
         assert note in text, note
     assert "No conclusions" in PILOT_BANNER
+
+
+def test_each_row_can_have_its_own_reference_as_in_the_geometry_pairs():
+    """Fails if a list of references is treated as one index, or a row is compared with another
+    scene's neutral row; a row that is its own reference is not listed."""
+    result = make_result()
+    lines = format_paired_table(result, [0, 0, 1], LABELS)
+    assert [row[:LABEL_WIDTH].strip() for row in lines[2:]] == ["bias 1 deg", "offset 50 ms"]
+    # offset 50 ms (row 2) minus bias 1 deg (row 1): rmse (2, 3, 4, 3) - (5, 6, nan, 7)
+    difference = paired_difference(result.metrics["run_position_rmse"][2],
+                                   result.metrics["run_position_rmse"][1])  # fmt: skip
+    assert format_paired_cell(difference) in lines[3]
+    assert difference.n_valid == 3 and difference.n_dropped == 1
+    with pytest.raises(ValueError, match="one reference per row"):
+        format_paired_table(result, [0, 0], LABELS)
+    with pytest.raises(ValueError, match="reference must be a row index"):
+        format_paired_table(result, [0, 0, 7], LABELS)

@@ -13,11 +13,12 @@ import numpy as np
 
 from fusion.mtt_experiment import SweepResult
 from fusion.mtt_metrics import PairedDifference, paired_difference
-from fusion.mtt_report import COLUMN_WIDTH, MEDIAN_WIDTH, VALID_WIDTH, settings_caption
+from fusion.mtt_report import COLUMN_WIDTH, VALID_WIDTH, settings_caption
 from fusion.outage_report import format_table
 from fusion.robustness_experiment import RobustnessConfig
 
 LABEL_WIDTH = 40
+PAIRED_MEDIAN_WIDTH = 18
 
 # Metric name -> (column header, significant digits of the mean).
 SCORE_COLUMNS = {
@@ -74,6 +75,11 @@ PAIRED_METRICS = {
     "camera_true_accept_rate": "d cam true acc",
 }
 
+CROSSING_MANEUVER_CAVEAT = (
+    "scenario crossing: turns and accelerations change the courses, so targets 0 and 1 no longer "
+    "cross at about 30 s as in the neutral row; the difference to the neutral row mixes the "
+    "response to the maneuver with the loss of that stress (read min sep, and use separated)"
+)
 PILOT_BANNER = (
     "PILOT: a does-it-run check with few seeds. No conclusions may be drawn from these numbers."
 )
@@ -232,7 +238,7 @@ def format_paired_cell(difference: PairedDifference, digits: int = 3) -> str:
 
 def format_paired_table(
     result: SweepResult,
-    reference: int,
+    reference: int | Sequence[int],
     row_labels: Sequence[str],
     metrics: Mapping[str, str] = PAIRED_METRICS,
     value_label: str = "row - reference",
@@ -247,7 +253,9 @@ def format_paired_table(
 
     Args:
         result: Sweep result of the rows.
-        reference: Index of the reference row (usually the neutral one); it is not listed.
+        reference: Index of the reference row (usually the neutral one), or one index per row
+            (each row is compared with its own reference). A row that is its own reference is
+            not listed.
         row_labels: Text of each row of the result, including the reference.
         metrics: Metric name -> header of its mean-difference column.
         value_label: Header of the first column.
@@ -261,28 +269,35 @@ def format_paired_table(
     n_rows = len(result.values)
     if len(row_labels) != n_rows:
         raise ValueError(f"need {n_rows} row labels, got {len(row_labels)}")
-    if not 0 <= reference < n_rows:
-        raise ValueError(f"reference must be a row index in [0, {n_rows}), got {reference}")
+    references = [reference] * n_rows if isinstance(reference, int) else list(reference)
+    if len(references) != n_rows:
+        raise ValueError(f"need one reference per row ({n_rows}), got {len(references)}")
+    for ref in references:
+        if not 0 <= ref < n_rows:
+            raise ValueError(f"reference must be a row index in [0, {n_rows}), got {ref}")
     missing = [name for name in metrics if name not in result.metrics]
     if missing:
         raise ValueError(f"the result lacks the metrics {missing}")
     header = f"{value_label:>{LABEL_WIDTH}}" + "".join(
         f"{text:>{COLUMN_WIDTH}}" for text in metrics.values()
     )
-    header += "".join(f"{'med ' + text:>{MEDIAN_WIDTH}}" for text in metrics.values())
+    header += "".join(f"{'med ' + text:>{PAIRED_MEDIAN_WIDTH}}" for text in metrics.values())
     header += f"{'dropped':>{VALID_WIDTH}}"
     lines = [caption] if caption else []
     lines += [header, "-" * len(header)]
     for i, label in enumerate(row_labels):
-        if i == reference:
+        if i == references[i]:
             continue
         differences = [
-            paired_difference(result.metrics[name][i], result.metrics[name][reference], confidence)
+            paired_difference(
+                result.metrics[name][i], result.metrics[name][references[i]], confidence
+            )
             for name in metrics
         ]
         cells = "".join(f"{format_paired_cell(d):>{COLUMN_WIDTH}}" for d in differences)
         medians = "".join(
-            f"{(f'{d.median:+.3g}' if d.n_valid else 'n/a'):>{MEDIAN_WIDTH}}" for d in differences
+            f"{(f'{d.median:+.3g}' if d.n_valid else 'n/a'):>{PAIRED_MEDIAN_WIDTH}}"
+            for d in differences
         )
         dropped = "/".join(str(d.n_dropped) for d in differences)
         lines.append(f"{label:>{LABEL_WIDTH}}{cells}{medians}{dropped:>{VALID_WIDTH}}")
