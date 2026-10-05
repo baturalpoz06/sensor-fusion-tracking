@@ -5,6 +5,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from fusion.angles import wrap_angle
+from fusion.maneuvers import Acceleration, RandomManeuvers, TruthDisturbance, Turn
 from fusion.mtt_experiment import SCENARIOS
 from fusion.mtt_simulation import (
     RNG_STREAMS,
@@ -15,7 +17,8 @@ from fusion.mtt_simulation import (
     uniform_clutter,
 )
 from fusion.sensors.camera import camera_measure
-from fusion.sensors.radar import radar_measure
+from fusion.sensors.radar import radar_measure, radar_to_cartesian
+from tests.test_phase7_regression import PHASE7_STREAMS
 
 TWO_TARGETS = np.array([[-450.0, 600.0, 15.0, 0.0], [400.0, -1400.0, 0.0, 12.0]])
 CLEAN = SimulationConfig(
@@ -351,3 +354,193 @@ def test_crossing_scenario_has_a_target_that_crosses_the_minus_x_axis():
         wrapper = truth[2]
         assert (wrapper[:, 0] < 0).all()
         assert wrapper[0, 1] > 0 > wrapper[-1, 1]
+
+
+# --- truth disturbances (Phase 8a) -----------------------------------------------------
+
+SEPARATED = SCENARIOS["separated"]
+SCENE30 = SimulationConfig(duration=30.0, radar_clutter_rate=5.0, camera_clutter_rate=5.0)
+DEG = np.pi / 180.0
+DISTURBANCES = {
+    "bias": TruthDisturbance(camera_bias=0.5 * DEG),
+    "time offset": TruthDisturbance(camera_time_offset=0.05),
+    "lever arm": TruthDisturbance(camera_position=(20.0, 0.0)),
+    "turn": TruthDisturbance(maneuvers=tuple((i, Turn(15.0, 25.0, 10 * DEG)) for i in range(3))),
+    "acceleration": TruthDisturbance(
+        maneuvers=tuple((i, Acceleration(15.0, 18.0, 2.0)) for i in range(3))
+    ),
+    "random": TruthDisturbance(random_maneuvers=RandomManeuvers(10.0, 5.0, 10 * DEG)),
+}
+CAMERA_ONLY = ("bias", "time offset", "lever arm")
+
+
+def scan_arrays(scans):
+    return [None if s is None else (s.z, s.origin) for s in scans]
+
+
+def assert_scans_equal(a, b):
+    assert len(a) == len(b)
+    for x, y in zip(scan_arrays(a), scan_arrays(b), strict=True):
+        assert (x is None) == (y is None)
+        if x is not None:
+            np.testing.assert_array_equal(x[0], y[0])
+            np.testing.assert_array_equal(x[1], y[1])
+
+
+def clutter_rows(scans):
+    return [s.z[s.origin < 0] for s in scans if s is not None]
+
+
+def sim_pair(disturbance, seed=3, config=SCENE30, states=SEPARATED):
+    base = simulate_mtt(states, config, make_mtt_rngs(seed))
+    rngs = make_mtt_rngs(seed)
+    return base, simulate_mtt(states, config, rngs, disturbance), rngs
+
+
+def test_random_streams_append_the_maneuver_stream_at_the_end():
+    """Fails if the maneuver stream is inserted before an existing one (all draws would shift)."""
+    assert RNG_STREAMS[-1] == "maneuver" and len(RNG_STREAMS) == 11
+    assert RNG_STREAMS[:10] == PHASE7_STREAMS
+
+
+def test_a_neutral_disturbance_is_the_same_as_none_bitwise():
+    """Fails if passing the default disturbance changes any result."""
+    a = simulate_mtt(SEPARATED, SCENE30, make_mtt_rngs(2))
+    b = simulate_mtt(SEPARATED, SCENE30, make_mtt_rngs(2), TruthDisturbance())
+    np.testing.assert_array_equal(a.truth, b.truth)
+    assert_scans_equal(a.radar_scans, b.radar_scans)
+    assert_scans_equal(a.camera_scans, b.camera_scans)
+
+
+def test_the_camera_bias_reaches_the_camera_scans_and_nothing_else():
+    """Fails if simulate_mtt drops the bias, applies it to the radar, or gives it the wrong sign."""
+    bias = 0.01
+    base = simulate_mtt(TWO_TARGETS, CLEAN, make_mtt_rngs(1))
+    biased = simulate_mtt(TWO_TARGETS, CLEAN, make_mtt_rngs(1), TruthDisturbance(camera_bias=bias))
+    np.testing.assert_array_equal(base.truth, biased.truth)
+    assert_scans_equal(base.radar_scans, biased.radar_scans)
+    for a, b in zip(base.camera_scans, biased.camera_scans, strict=True):
+        _, za = target_rows(a)
+        _, zb = target_rows(b)
+        np.testing.assert_allclose(wrap_angle(zb - za), bias, rtol=0.0, atol=8 * np.spacing(np.pi))
+
+
+def test_the_camera_position_reaches_the_camera_scans_and_nothing_else():
+    """Fails if simulate_mtt drops the camera position or moves the radar with it."""
+    position = (30.0, -20.0)
+    base = simulate_mtt(TWO_TARGETS, CLEAN, make_mtt_rngs(1))
+    moved = simulate_mtt(
+        TWO_TARGETS, CLEAN, make_mtt_rngs(1), TruthDisturbance(camera_position=position)
+    )
+    assert_scans_equal(base.radar_scans, moved.radar_scans)
+    for k, (a, b) in enumerate(zip(base.camera_scans, moved.camera_scans, strict=True)):
+        _, za = target_rows(a)
+        _, zb = target_rows(b)
+        states = base.truth[:, k]
+        shift = np.arctan2(states[:, 1] - position[1], states[:, 0] - position[0]) - np.arctan2(
+            states[:, 1], states[:, 0]
+        )
+        np.testing.assert_allclose(wrap_angle(zb[:, 0] - za[:, 0]), wrap_angle(shift), atol=1e-12)
+
+
+def test_the_camera_time_offset_makes_the_camera_see_the_past():
+    """Fails if the offset is dropped, applied to the radar, or looks into the future.
+
+    With the noise held equal by the seed, the camera measurement differs from the undelayed
+    one by the bearing of the truth 0.1 s earlier minus the bearing of the truth now.
+    """
+    delay = 0.1  # one whole step: the delayed truth is the previous grid state
+    base = simulate_mtt(TWO_TARGETS, CLEAN, make_mtt_rngs(1))
+    late = simulate_mtt(
+        TWO_TARGETS, CLEAN, make_mtt_rngs(1), TruthDisturbance(camera_time_offset=delay)
+    )
+    np.testing.assert_array_equal(base.truth, late.truth)
+    assert_scans_equal(base.radar_scans, late.radar_scans)
+    for k in range(2, 30):
+        _, za = target_rows(base.camera_scans[k])
+        _, zb = target_rows(late.camera_scans[k])
+        past, now = base.truth[:, k - 1], base.truth[:, k]
+        shift = np.arctan2(past[:, 1], past[:, 0]) - np.arctan2(now[:, 1], now[:, 0])
+        np.testing.assert_allclose(wrap_angle(zb[:, 0] - za[:, 0]), wrap_angle(shift), atol=1e-12)
+        future = base.truth[:, k + 1]
+        wrong = np.arctan2(future[:, 1], future[:, 0]) - np.arctan2(now[:, 1], now[:, 0])
+        assert not np.allclose(wrap_angle(zb[:, 0] - za[:, 0]), wrap_angle(wrong), atol=1e-6)
+
+
+def test_a_maneuver_changes_only_its_target_and_the_truth_the_sensors_see():
+    """Fails if a schedule hits the wrong target, or the scans are not made from the moved truth."""
+    turn = TruthDisturbance(maneuvers=((0, Turn(5.0, 10.0, 20 * DEG)),))
+    base = simulate_mtt(TWO_TARGETS, CLEAN, make_mtt_rngs(1), None)
+    turned = simulate_mtt(TWO_TARGETS, CLEAN, make_mtt_rngs(1), turn)
+    np.testing.assert_array_equal(turned.truth[1], base.truth[1])
+    np.testing.assert_array_equal(turned.truth[0, :51], base.truth[0, :51])
+    gap = np.hypot(*(turned.truth[0, 200, :2] - base.truth[0, 200, :2]))
+    assert gap > 200.0  # precondition: the turn moved the target far from its straight path
+    # The radar scan at that step is built from the turned truth, not from the straight one.
+    _, z = target_rows(turned.radar_scans[200])
+    measured = radar_to_cartesian(z[:1])[0]
+    assert np.hypot(*(measured - turned.truth[0, 200, :2])) < 0.5 * gap
+    assert np.hypot(*(measured - base.truth[0, 200, :2])) > 0.5 * gap
+
+
+def test_a_maneuver_for_an_unknown_target_is_refused():
+    """Fails if a schedule for a target that does not exist is silently ignored."""
+    disturbance = TruthDisturbance(maneuvers=((5, Turn(1.0, 2.0, 0.1)),))
+    with pytest.raises(ValueError, match="unknown target"):
+        simulate_mtt(TWO_TARGETS, CLEAN, make_mtt_rngs(0), disturbance)
+
+
+@pytest.mark.parametrize("name", list(DISTURBANCES))
+def test_a_disturbance_leaves_every_random_stream_but_maneuver_untouched(name):
+    """Fails if enabling a disturbance consumes or shifts the clutter, detection, noise,
+    shuffle, trajectory or dropout streams (Phase 8a RNG isolation).
+
+    The precondition that no target crosses the field of view is checked first: only then are
+    the detected counts, and with them the shuffle draws, the same.
+    """
+    base, disturbed, rngs = sim_pair(DISTURBANCES[name])
+    reference = make_mtt_rngs(3)
+    simulate_mtt(SEPARATED, SCENE30, reference)
+    fov_base = SCENE30.fov.contains(base.truth[:, :, :2].reshape(-1, 2))
+    fov_disturbed = SCENE30.fov.contains(disturbed.truth[:, :, :2].reshape(-1, 2))
+    np.testing.assert_array_equal(fov_base, fov_disturbed)
+    for stream in RNG_STREAMS:
+        if stream != "maneuver":
+            assert rngs[stream].bit_generator.state == reference[stream].bit_generator.state, stream
+    for a, b in zip(
+        clutter_rows(base.radar_scans) + clutter_rows(base.camera_scans),
+        clutter_rows(disturbed.radar_scans) + clutter_rows(disturbed.camera_scans),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(a, b)
+    detected = [s.origin for s in base.camera_scans], [s.origin for s in disturbed.camera_scans]
+    for a, b in zip(*detected, strict=True):
+        np.testing.assert_array_equal(a, b)  # same targets detected, in the same order
+
+
+@pytest.mark.parametrize("name", CAMERA_ONLY)
+def test_camera_disturbances_do_not_change_truth_or_radar_scans_bitwise(name):
+    """Fails if a camera disturbance leaks into the truth or the radar data."""
+    base, disturbed, _ = sim_pair(DISTURBANCES[name])
+    np.testing.assert_array_equal(base.truth, disturbed.truth)
+    assert_scans_equal(base.radar_scans, disturbed.radar_scans)
+
+
+def test_the_maneuver_stream_is_read_only_for_random_maneuvers():
+    """Fails if a disturbance without random maneuvers consumes the maneuver stream."""
+    reference = make_mtt_rngs(3)["maneuver"].bit_generator.state
+    for name, disturbance in DISTURBANCES.items():
+        _, _, rngs = sim_pair(disturbance)
+        changed = rngs["maneuver"].bit_generator.state != reference
+        assert changed == (name == "random"), name
+
+
+def test_a_disturbed_simulation_is_deterministic_per_seed():
+    """Fails if a disturbance, random maneuvers included, does not follow the seed."""
+    d = DISTURBANCES["random"]
+    a = simulate_mtt(SEPARATED, SCENE30, make_mtt_rngs(4), d)
+    b = simulate_mtt(SEPARATED, SCENE30, make_mtt_rngs(4), d)
+    c = simulate_mtt(SEPARATED, SCENE30, make_mtt_rngs(5), d)
+    np.testing.assert_array_equal(a.truth, b.truth)
+    assert_scans_equal(a.camera_scans, b.camera_scans)
+    assert not np.array_equal(a.truth, c.truth)

@@ -6,7 +6,12 @@ from typing import NamedTuple
 import numpy as np
 
 from fusion.angles import wrap_angle
-from fusion.scenario import constant_velocity_trajectory
+from fusion.maneuvers import (
+    TruthDisturbance,
+    delayed_states,
+    maneuvering_trajectory,
+    resolve_schedules,
+)
 from fusion.sensors.camera import camera_measure
 from fusion.sensors.radar import radar_measure
 
@@ -26,6 +31,7 @@ RNG_STREAMS = (
     "camera_clutter",
     "camera_shuffle",
     "dropout",
+    "maneuver",
 )
 
 
@@ -241,6 +247,7 @@ def simulate_mtt(
     initial_states: np.ndarray,
     config: SimulationConfig,
     rngs: dict[str, np.random.Generator],
+    disturbance: TruthDisturbance | None = None,
 ) -> MttSimulation:
     """Simulate several targets and both sensors' scans with misses and clutter.
 
@@ -252,28 +259,49 @@ def simulate_mtt(
     A target outside the field of view is never detected. Each scan is shuffled,
     so the order of measurements does not reveal their origin.
 
+    The disturbance describes how the real world differs from the default one: target
+    maneuvers, and the camera's position, bearing bias and time offset. Its defaults are
+    neutral and leave every result bit for bit as without it. A disturbance adds no random
+    draw to any stream but "maneuver" (read only for random maneuvers): the radar scans do
+    not depend on the camera settings, and detections, clutter and shuffles are drawn as
+    before (they change only through the detected count if a maneuver moves a target across
+    the field of view). The camera measures the truth at t - camera_time_offset, stamped t;
+    detection and the field of view test use the truth at t.
+
     Args:
         initial_states: Shape (n_targets, 4) starting states [x, y, vx, vy].
         config: Scene and sensor parameters.
         rngs: Generators from make_mtt_rngs.
+        disturbance: Truth-side disturbances; None means none.
 
     Returns:
         MttSimulation with truth (n_targets, n + 1, 4) and the scans of every step.
 
     Raises:
-        ValueError: If initial_states does not have shape (n_targets, 4).
+        ValueError: If initial_states does not have shape (n_targets, 4), or a maneuver is
+            invalid for this scene (unknown target, off the step grid, overlapping).
     """
     initial_states = np.asarray(initial_states, dtype=float)
     if initial_states.ndim != 2 or initial_states.shape[1] != 4:
         raise ValueError(f"initial_states must have shape (n, 4), got {initial_states.shape}")
     n_targets, n_points = len(initial_states), config.n_steps + 1
+    if disturbance is None:
+        disturbance = TruthDisturbance()
 
-    truth = _stack(
+    schedules = resolve_schedules(
+        disturbance, n_targets, config.dt, config.n_steps, rngs["maneuver"]
+    )
+    trajectories = [
+        maneuvering_trajectory(
+            state, config.dt, config.n_steps, config.accel_std, rngs["trajectory"], schedule
+        )
+        for state, schedule in zip(initial_states, schedules, strict=True)
+    ]
+    truth = _stack([trajectory.states for trajectory in trajectories], (0, n_points, 4))
+    camera_truth = _stack(
         [
-            constant_velocity_trajectory(
-                state, config.dt, config.n_steps, config.accel_std, rngs["trajectory"]
-            )
-            for state in initial_states
+            delayed_states(trajectory, config.dt, disturbance.camera_time_offset)
+            for trajectory in trajectories
         ],
         (0, n_points, 4),
     )
@@ -290,8 +318,14 @@ def simulate_mtt(
     )
     camera_z = _stack(
         [
-            camera_measure(states, config.camera_bearing_std, rng=rngs["camera_noise"])
-            for states in truth
+            camera_measure(
+                states,
+                config.camera_bearing_std,
+                rng=rngs["camera_noise"],
+                position=disturbance.camera_position,
+                bias=disturbance.camera_bias,
+            )
+            for states in camera_truth
         ],
         (0, n_points, 1),
     )
