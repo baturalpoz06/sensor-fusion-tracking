@@ -299,7 +299,10 @@ def maneuver_rows(
     def focus(window: tuple[float, float]) -> tuple[float, float]:
         return window[0], min(window[1] + recovery, base.duration)
 
-    rows = [Row("neutral", 0.0, base)]
+    # The neutral row gets the focus window of the turn rows, so that window scores are
+    # comparable with them; the window only selects steps to score, nothing is simulated or
+    # tracked differently.
+    rows = [Row("neutral", 0.0, replace(base, focus_window=focus(turn_window)))]
     for rate in turn_rates_deg:
         turns = tuple((i, Turn(*turn_window, rate * DEG)) for i in range(n_targets))
         config = replace(

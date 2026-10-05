@@ -312,7 +312,7 @@ def test_noise_rows_scale_one_knob_at_a_time_around_one_neutral_row():
 def test_maneuver_rows_give_every_target_the_maneuver_in_the_right_units():
     """Fails if turn rates are not converted to rad/s, a target is left out, or windows differ."""
     rows = maneuver_rows(SHORT, n_targets=3)
-    assert len(rows) == 10 and rows[0].config == SHORT
+    assert len(rows) == 10 and rows[0].config == replace(SHORT, focus_window=(15.0, 20.0))
     turn = rows[1]
     assert turn.group == "turn" and turn.x == 5.0
     maneuvers = turn.config.truth.maneuvers
@@ -485,3 +485,24 @@ def test_simulate_and_track_uses_the_disturbance_and_the_belief_of_its_config():
     for a, b in zip(sim.camera_scans, expected.camera_scans, strict=True):
         np.testing.assert_array_equal(a.z, b.z)
     assert run.tracker._camera_model.position == (30.0, 0.0)
+
+
+def test_the_neutral_maneuver_row_has_the_turn_focus_window_and_is_otherwise_unchanged():
+    """Fails if the neutral row lacks the window of the turn rows (window scores would not be
+    comparable), gains a disturbance or belief, or the window changes any non-window score.
+
+    The window is evaluation only: the other scores of the row equal those of the same
+    configuration without a window, bit for bit.
+    """
+    rows = maneuver_rows(SHORT, n_targets=3)
+    neutral, turn = rows[0], rows[1]
+    assert neutral.config.focus_window == turn.config.focus_window == (15.0, 20.0)
+    assert replace(neutral.config, focus_window=None) == SHORT
+    with_window = run_robustness_trial(SEPARATED, neutral.config, 1)
+    without = run_robustness_trial(SEPARATED, SHORT, 1)
+    for name in FIELDS:
+        if name.startswith("window_"):
+            assert np.isfinite(getattr(with_window, name)) or name == "window_ghost_rate", name
+            assert np.isnan(getattr(without, name)), name
+        else:
+            np.testing.assert_equal(getattr(with_window, name), getattr(without, name))
