@@ -144,3 +144,32 @@ def test_phase_6_random_streams_keep_their_draws_when_streams_are_appended():
         rngs = make_mtt_rngs(seed)
         for name, expected in zip(PHASE6_STREAMS, reference, strict=True):
             np.testing.assert_array_equal(rngs[name].random(8), expected.random(8))
+
+
+def test_the_robustness_pipeline_at_neutral_defaults_reproduces_the_phase_6_golden(
+    golden, recorder
+):
+    """Fails if the truth / belief separation (disturbance hooks, tracker setup, diagnostics)
+    changes a Phase 6 result at neutral defaults.
+
+    Runs the whole Phase 6 grid through run_robustness_trial and simulate_and_track, not
+    through the recorder's own loop, so the new code path itself is what is compared: the
+    metrics and, where the environment matches, the digest of every step's tracks.
+    """
+    from fusion.mtt_experiment import SCENARIOS
+    from fusion.robustness_experiment import (
+        RobustnessConfig,
+        run_robustness_trial,
+        simulate_and_track,
+    )
+
+    for key, expected in golden["trials"].items():
+        scenario, case, seed = key.split("/")
+        config = RobustnessConfig.from_mtt(recorder.case_config(case))
+        states = SCENARIOS[scenario]
+        metrics = run_robustness_trial(states, config, int(seed))
+        actual = [float(getattr(metrics, f"run_{name}")).hex() for name in golden["metric_fields"]]
+        assert_same(actual, expected["metrics"], golden["exact"], key)
+        if golden["exact"]:
+            _, run = simulate_and_track(states, config, int(seed))
+            assert recorder.history_digest(run.history) == expected["history_sha256"], key
