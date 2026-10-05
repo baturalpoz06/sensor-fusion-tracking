@@ -20,6 +20,20 @@ METRIC_TITLES = {
     "false_track_rate": "False tracks per step (never matched)",
     "id_switches": "ID switches per run (after burn-in)",
     "births_per_scan": "Track births per radar scan",
+    "run_position_rmse": "Position RMSE [m] (Phase 6 match)",
+    "run_ghost_rate": "Ghost tracks per step (unmatched)",
+    "run_missed_rate": "Missed-target rate",
+    "run_id_switches": "ID switches per run (after burn-in)",
+    "match_fraction_wide": "Targets matched within the wide distance",
+    "along_rms": "Along-range error RMS [m]",
+    "cross_rms": "Cross-range error RMS [m]",
+    "cross_mean": "Cross-range error mean [m] (CCW positive)",
+    "nees_mean": "NEES mean (ideal 4)",
+    "camera_accept_rate": "Camera updates per track offered",
+    "camera_true_accept_rate": "Detected targets updated with their own measurement",
+    "camera_wrong_update_rate": "Camera updates with clutter or another target",
+    "window_position_rmse": "Position RMSE in the focus window [m]",
+    "window_cross_rms": "Cross-range error RMS in the focus window [m]",
 }
 
 PARAMETER_LABELS = {
@@ -40,7 +54,12 @@ SERIES = "#2a78d6"
 COLUMNS = 4
 
 
-def build_sweep_figure(result: SweepResult, confidence: float = 0.95, title: str | None = None):
+def build_sweep_figure(
+    result: SweepResult,
+    confidence: float = 0.95,
+    title: str | None = None,
+    log_x: bool = False,
+):
     """Figure with one panel per metric: seed mean as a line, confidence interval as a band.
 
     Values where fewer than 2 seeds are valid have no band, and values with no
@@ -50,6 +69,7 @@ def build_sweep_figure(result: SweepResult, confidence: float = 0.95, title: str
         result: Sweep result from fusion.mtt_experiment.sweep.
         confidence: Coverage of the Student t band across seeds.
         title: Optional figure title.
+        log_x: Whether the x axis is logarithmic (for scale factors); the values must be > 0.
 
     Returns:
         A matplotlib Figure (not attached to pyplot; nothing is shown or registered).
@@ -61,7 +81,7 @@ def build_sweep_figure(result: SweepResult, confidence: float = 0.95, title: str
     fig = Figure(figsize=(4.0 * COLUMNS, 3.1 * rows), facecolor=SURFACE, layout="constrained")
     axes = fig.subplots(rows, COLUMNS, squeeze=False)
     for ax, name in zip(axes.flat, names, strict=False):
-        _draw_panel(ax, result, name, confidence)
+        _draw_panel(ax, result, name, confidence, log_x)
     for ax in axes.flat[len(names) :]:
         ax.set_visible(False)
     if title:
@@ -69,7 +89,7 @@ def build_sweep_figure(result: SweepResult, confidence: float = 0.95, title: str
     return fig
 
 
-def _draw_panel(ax, result: SweepResult, name: str, confidence: float) -> None:
+def _draw_panel(ax, result: SweepResult, name: str, confidence: float, log_x: bool) -> None:
     intervals = [seed_confidence_interval(row, confidence) for row in result.metrics[name]]
     mean = np.array([i.mean for i in intervals])
     # The scores are non-negative: clip the band at zero instead of letting the axis cut it.
@@ -93,6 +113,11 @@ def _draw_panel(ax, result: SweepResult, name: str, confidence: float) -> None:
         PARAMETER_LABELS.get(result.parameter, result.parameter), fontsize=8, color=INK_MUTED
     )
     ax.set_ylim(bottom=0.0)
+    if log_x:
+        ax.set_xscale("log")
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{value:g}" for value in x])
+        ax.minorticks_off()
     ax.grid(True, color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
     ax.tick_params(colors=INK_MUTED, labelsize=8, length=0)
@@ -105,6 +130,7 @@ def plot_sweep(
     path: str | Path,
     confidence: float = 0.95,
     title: str | None = None,
+    log_x: bool = False,
 ) -> Path:
     """Save the sweep figure as an image; missing parent directories are created.
 
@@ -113,11 +139,12 @@ def plot_sweep(
         path: Output file; the extension picks the format (e.g. .png).
         confidence: Coverage of the Student t band across seeds.
         title: Optional figure title.
+        log_x: Whether the x axis is logarithmic (see build_sweep_figure).
 
     Returns:
         The path written.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    build_sweep_figure(result, confidence, title).savefig(path, dpi=150, facecolor=SURFACE)
+    build_sweep_figure(result, confidence, title, log_x).savefig(path, dpi=150, facecolor=SURFACE)
     return path

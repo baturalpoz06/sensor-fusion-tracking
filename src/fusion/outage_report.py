@@ -155,7 +155,7 @@ def format_coast_check(
     return lines
 
 
-def _format_table(
+def format_table(
     result: SweepResult,
     columns: Mapping[str, tuple[str, int]],
     medians: Mapping[str, str],
@@ -164,10 +164,27 @@ def _format_table(
     value_label: str,
     caption: str | None,
     confidence: float,
+    label_width: int = LABEL_WIDTH,
 ) -> list[str]:
+    """Table lines of a sweep: one row per label, mean +- half-width columns, then medians.
+
+    Args:
+        result: Sweep result whose metrics include every name used below.
+        columns: Metric name -> (column header, significant digits of the mean).
+        medians: Metric name -> header of a median column (after the mean columns).
+        valid_names: The two metrics whose number of valid seeds is printed as "a/b".
+        row_labels: Text of the first column, one per row.
+        value_label: Header of the first column.
+        caption: Optional first line.
+        confidence: Coverage of the Student t interval across seeds.
+        label_width: Width of the first column.
+
+    Raises:
+        ValueError: If row_labels does not have one entry per row.
+    """
     if len(row_labels) != len(result.values):
         raise ValueError(f"need {len(result.values)} row labels, got {len(row_labels)}")
-    header = f"{value_label:>{LABEL_WIDTH}}" + "".join(
+    header = f"{value_label:>{label_width}}" + "".join(
         f"{text:>{COLUMN_WIDTH}}" for text, _ in columns.values()
     )
     header += "".join(f"{text:>{MEDIAN_WIDTH}}" for text in medians.values())
@@ -186,7 +203,7 @@ def _format_table(
             str(seed_confidence_interval(result.metrics[name][i], confidence).n_valid)
             for name in valid_names
         )
-        lines.append(f"{label:>{LABEL_WIDTH}}{cells}{median_cells}{counts:>{VALID_WIDTH}}")
+        lines.append(f"{label:>{label_width}}{cells}{median_cells}{counts:>{VALID_WIDTH}}")
     return lines
 
 
@@ -218,7 +235,7 @@ def format_window_table(
     columns = {f"{window}_{m}": COLUMNS[m] for m in WINDOW_METRICS}
     medians = {f"{window}_{m}": text for m, text in WINDOW_MEDIANS.items()}
     valid = (f"{window}_position_rmse", f"{window}_missed_rate")
-    return _format_table(
+    return format_table(
         result, columns, medians, valid, row_labels, value_label, caption, confidence
     )
 
@@ -247,7 +264,7 @@ def format_outage_table(
         ValueError: If row_labels does not match the points.
     """
     valid = ("reacquisition_time", "nees_outage")
-    return _format_table(
+    return format_table(
         result, OUTAGE_COLUMNS, OUTAGE_MEDIANS, valid, row_labels, value_label, caption, confidence
     )
 

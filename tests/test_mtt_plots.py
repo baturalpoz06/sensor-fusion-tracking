@@ -115,3 +115,32 @@ def test_unused_grid_cells_are_hidden():
     fig = build_sweep_figure(SweepResult(result.parameter, result.values, metrics))
     assert len(visible_axes(fig)) == len(metrics) == 7
     assert len(fig.axes) == 8
+
+
+def test_a_logarithmic_x_axis_is_optional_and_labels_the_swept_values():
+    """Fails if log_x is ignored, or the default axis stops being linear."""
+    scales = np.array([0.25, 0.5, 1.0, 2.0, 4.0])
+    rng = np.random.default_rng(1)
+    metrics = {"run_position_rmse": 1.0 + rng.random((len(scales), 5))}
+    result = SweepResult("scale", scales, metrics)
+    linear = visible_axes(build_sweep_figure(result))[0]
+    logarithmic = visible_axes(build_sweep_figure(result, log_x=True))[0]
+    assert linear.get_xscale() == "linear" and logarithmic.get_xscale() == "log"
+    assert [t.get_text() for t in logarithmic.get_xticklabels()] == ["0.25", "0.5", "1", "2", "4"]
+    assert logarithmic.get_title(loc="left") == METRIC_TITLES["run_position_rmse"]
+
+
+def test_every_robustness_metric_that_is_plotted_has_a_title():
+    """Fails if a plotted robustness score falls back to its raw field name as a title."""
+    from fusion.robustness_metrics import FIELDS
+
+    plotted = (
+        "run_position_rmse",
+        "run_missed_rate",
+        "cross_rms",
+        "nees_mean",
+        "camera_true_accept_rate",
+        "camera_accept_rate",
+        "window_position_rmse",
+    )
+    assert set(plotted) <= set(FIELDS) and all(name in METRIC_TITLES for name in plotted)
