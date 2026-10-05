@@ -308,6 +308,45 @@ def test_skipped_updates_are_only_counted_for_camera_scans_with_measurements():
     assert tracker.camera_skipped == 0
 
 
+# --- camera position (Phase 8a hooks) --------------------------------------------------
+
+
+def test_camera_ambiguity_is_judged_from_the_camera_position_the_model_assumes():
+    """Fails if the ambiguity check measures bearings from the origin instead of the model.
+
+    Two tracks on one ray from the origin look identical to a camera there (skipped), but
+    are well separated for a camera 500 m to the side, which can then update them.
+    """
+    offset = CameraModel(float(np.deg2rad(0.1)), (0.0, 500.0))
+    results = {}
+    for name, model in {"origin": CAMERA, "offset": offset}.items():
+        tracker = MultiTargetTracker(make_config(use_camera=True), RADAR, model)
+        a = tracker.add_track(at_bearing(1000.0, 0.0), tight(), CONFIRMED_STATE)
+        b = tracker.add_track(at_bearing(1500.0, 0.0), tight(), CONFIRMED_STATE)
+        before = a.filter.x.copy()
+        z = model.h(a.filter.x) + 0.002
+        tracker.step(None, np.array([z]))
+        results[name] = (tracker.camera_skipped, not np.array_equal(a.filter.x, before), b)
+    assert results["origin"][:2] == (2, False)
+    assert results["offset"][:2] == (0, True)
+
+
+def test_a_confirmed_track_next_to_the_assumed_camera_is_not_given_to_the_camera():
+    """Fails if the near-sensor guard of the camera update is still measured from the origin.
+
+    The track is 10 m from the camera but 510 m from the radar: the bearing Jacobian is huge
+    there, so it must be left alone (no update, no exception).
+    """
+    model = CameraModel(float(np.deg2rad(0.1)), (500.0, 0.0))
+    tracker = MultiTargetTracker(make_config(use_camera=True), RADAR, model)
+    track = tracker.add_track(np.array([510.0, 0.0, 0.0, 0.0]), tight(), CONFIRMED_STATE)
+    reference = ExtendedKalmanFilter(DT, ACCEL_STD, track.filter.x, track.filter.P)
+    reference.predict()
+    tracker.step(None, np.array([[0.3]]))
+    np.testing.assert_array_equal(track.filter.x, reference.x)
+    np.testing.assert_array_equal(track.filter.P, reference.P)
+
+
 # --- Phase 4 regression --------------------------------------------------------------
 
 

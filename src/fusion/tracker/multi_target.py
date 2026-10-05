@@ -348,7 +348,7 @@ class MultiTargetTracker:
         Tracks i and j overlap if |wrap(theta_i - theta_j)| < sqrt(gamma) * (s_i + s_j),
         with s the std of each track's predicted bearing innovation.
         """
-        bearings = np.array([np.arctan2(t.filter.x[1], t.filter.x[0]) for t in tracks])
+        bearings = np.array([self._camera_model.h(t.filter.x)[0] for t in tracks])
         sigma = np.array(
             [
                 np.sqrt(innovation_covariance(t.filter.x, t.filter.P, self._camera_model)[0, 0])
@@ -363,10 +363,14 @@ class MultiTargetTracker:
 
     def _camera_scan(self, z: np.ndarray) -> None:
         guard = max(self.config.min_range, MIN_RANGE)
+        # The guard is on the distance from the camera the model assumes: close to it the
+        # bearing Jacobian explodes. At the default position this is the range from the radar.
+        cx, cy = self._camera_model.position
         confirmed = [
             t
             for t in self._tracks
-            if t.status is TrackStatus.CONFIRMED and np.hypot(*t.filter.x[:2]) >= guard
+            if t.status is TrackStatus.CONFIRMED
+            and np.hypot(t.filter.x[0] - cx, t.filter.x[1] - cy) >= guard
         ]
         if not confirmed or len(z) == 0:
             return
