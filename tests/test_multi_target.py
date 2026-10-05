@@ -14,6 +14,7 @@ from fusion.mtt_simulation import SimulationConfig, make_mtt_rngs, simulate_mtt
 from fusion.sensors.camera import CameraModel
 from fusion.sensors.radar import RadarModel, radar_initial_estimate
 from fusion.tracker.multi_target import (
+    CameraStepLog,
     MultiTargetTracker,
     TrackerConfig,
     run_multi_target_tracking,
@@ -448,3 +449,89 @@ def test_a_tentative_track_neither_receives_nor_blocks_camera_updates():
     assert not np.array_equal(confirmed.filter.x, x_confirmed)  # updated, not blocked
     np.testing.assert_array_equal(tentative.filter.x, x_tentative)  # not updated
     assert tracker.camera_skipped == 0
+
+
+# --- camera diagnostics (Phase 8a) -----------------------------------------------------
+
+
+def camera_tracker(*bearings, status=CONFIRMED_STATE, range_=1000.0):
+    tracker = make_tracker(use_camera=True)
+    tracks = [tracker.add_track(at_bearing(range_, b), tight(), status) for b in bearings]
+    return tracker, tracks
+
+
+def test_the_camera_log_records_the_update_of_a_track_with_the_row_of_its_measurement():
+    """Fails if the log loses who was updated with which row, or the offered / accepted counts."""
+    tracker, (track,) = camera_tracker(0.3)
+    tracker.step(None, np.array([[0.9], [0.3 + 0.002], [-1.0]]))  # clutter, target, clutter
+    assert tracker.camera_log == [CameraStepLog((track.track_id,), (), ((track.track_id, 1),))]
+    assert (tracker.camera_offered, tracker.camera_accepted) == (1, 1)
+
+
+def test_the_camera_log_marks_a_track_whose_gate_holds_no_measurement_as_offered_not_accepted():
+    """Fails if a gated-out scan is counted as an update (the accept rate would be too high)."""
+    tracker, (track,) = camera_tracker(0.3)
+    tracker.step(None, np.array([[0.3 + 0.5]]))
+    assert tracker.camera_log == [CameraStepLog((track.track_id,), (), ())]
+    assert (tracker.camera_offered, tracker.camera_accepted) == (1, 0)
+
+
+def test_the_camera_log_separates_usable_from_ambiguous_tracks():
+    """Fails if skipped (overlapping gates) and usable tracks are mixed up in the log."""
+    tracker = make_tracker(use_camera=True)
+    a = tracker.add_track(at_bearing(1000.0, 0.0), tight(), CONFIRMED_STATE)
+    b = tracker.add_track(at_bearing(1500.0, 0.0033), tight(), CONFIRMED_STATE)
+    c = tracker.add_track(at_bearing(1000.0, 1.0), tight(), CONFIRMED_STATE)
+    tracker.step(None, np.array([[0.002], [1.0 + 0.002]]))
+    log = tracker.camera_log[0]
+    assert log.skipped == (a.track_id, b.track_id)
+    assert log.usable == (c.track_id,) and log.assigned == ((c.track_id, 1),)
+    assert tracker.camera_skipped == 2
+    assert (tracker.camera_offered, tracker.camera_accepted) == (1, 1)
+
+
+def test_tentative_tracks_are_never_offered_the_camera_scan():
+    """Fails if tentative tracks appear in the log (the camera only serves confirmed tracks)."""
+    tracker, _ = camera_tracker(0.3, status=Lifecycle(TENTATIVE, 1, 1, 0))
+    tracker.step(None, np.array([[0.3 + 0.002]]))
+    assert tracker.camera_log == [CameraStepLog()]
+    assert tracker.camera_offered == 0
+
+
+def test_there_is_one_camera_log_entry_per_step_on_every_path():
+    """Fails if a step without a camera update (no scan, empty scan, no confirmed track,
+    camera off) skips its entry, which would shift the log against the step index."""
+    tracker, _ = camera_tracker(0.3)
+    tracker.step(None, None)  # the camera did not scan
+    tracker.step(None, np.zeros((0, 1)))  # a scan without measurements
+    tracker.step(None, np.array([[0.3 + 0.002]]))
+    assert len(tracker.camera_log) == 3
+    assert tracker.camera_log[0] == tracker.camera_log[1] == CameraStepLog()
+    assert len(tracker.camera_log[2].assigned) == 1
+
+    empty = make_tracker(use_camera=True)
+    empty.step(None, np.array([[0.1]]))  # a camera scan but no track
+    off = make_tracker(use_camera=False)
+    off.add_track(at_bearing(1000.0, 0.3), tight(), CONFIRMED_STATE)
+    off.step(None, np.array([[0.3]]))
+    for quiet in (empty, off):
+        assert quiet.camera_log == [CameraStepLog()]
+        assert (quiet.camera_offered, quiet.camera_accepted) == (0, 0)
+
+
+def test_the_camera_log_of_a_simulation_has_one_consistent_entry_per_step():
+    """Fails if the log and the counters disagree on a full run, or tracks are both usable and
+    skipped."""
+    config = SimulationConfig(duration=20.0, radar_clutter_rate=3.0, camera_clutter_rate=3.0)
+    sim = simulate_mtt(SCENARIOS["crossing"], config, make_mtt_rngs(1))
+    run = run_multi_target_tracking(sim, make_config(use_camera=True), RADAR, CAMERA)
+    log = run.tracker.camera_log
+    assert len(log) == len(sim.camera_scans)
+    assert run.tracker.camera_offered == sum(len(e.usable) for e in log) > 0
+    assert run.tracker.camera_accepted == sum(len(e.assigned) for e in log) > 0
+    assert run.tracker.camera_accepted <= run.tracker.camera_offered
+    assert run.tracker.camera_skipped == sum(len(e.skipped) for e in log)
+    for entry, scan in zip(log, sim.camera_scans, strict=True):
+        assert not set(entry.usable) & set(entry.skipped)
+        assert {track for track, _ in entry.assigned} <= set(entry.usable)
+        assert all(0 <= row < len(scan.z) for _, row in entry.assigned)

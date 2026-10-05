@@ -96,6 +96,24 @@ class TrackerConfig:
             )
 
 
+class CameraStepLog(NamedTuple):
+    """What the camera update of one step did; a diagnostic, never read by the tracker.
+
+    All three fields are empty at a step without a camera scan, without measurements in it, or
+    without a confirmed track the camera could use.
+
+    Attributes:
+        usable: Ids of the confirmed tracks that were offered the scan (not too close to the
+            camera, bearing gate not overlapping the gate of another confirmed track).
+        skipped: Ids of the confirmed tracks left out because their bearing gates overlap.
+        assigned: (track id, row of the camera scan) pairs of the updates that were made.
+    """
+
+    usable: tuple[int, ...] = ()
+    skipped: tuple[int, ...] = ()
+    assigned: tuple[tuple[int, int], ...] = ()
+
+
 class TrackSnapshot(NamedTuple):
     """Copy of one live track after a step.
 
@@ -137,6 +155,9 @@ class MultiTargetTracker:
         radar_scans: Number of radar scans processed so far (none during an aware outage).
         coast_deletions: Tracks deleted for coasting longer than max_coast_time.
         tentative_drops: Tentative tracks deleted at the start of an aware outage step.
+        camera_log: One CameraStepLog per call of step, in order (diagnostic only).
+        camera_offered: Camera scans offered to confirmed tracks so far (track-scan pairs).
+        camera_accepted: Of those, the updates made (a measurement passed the gate).
     """
 
     def __init__(
@@ -168,6 +189,9 @@ class MultiTargetTracker:
         self.radar_scans = 0
         self.coast_deletions = 0
         self.tentative_drops = 0
+        self.camera_log: list[CameraStepLog] = []
+        self.camera_offered = 0
+        self.camera_accepted = 0
 
     @property
     def tracks(self) -> list[Track]:
@@ -248,8 +272,10 @@ class MultiTargetTracker:
             track.coast_steps += 1
         if radar is not None and not aware_outage:
             self._radar_scan(radar)
-        if camera is not None:
-            self._camera_scan(camera)
+        entry = self._camera_scan(camera) if camera is not None else CameraStepLog()
+        self.camera_log.append(entry)
+        self.camera_offered += len(entry.usable)
+        self.camera_accepted += len(entry.assigned)
         if aware_outage:
             self._end_of_outage_step()
         return [
@@ -276,25 +302,30 @@ class MultiTargetTracker:
         free: np.ndarray,
         model: MeasurementModel,
         gate: float,
-    ) -> set[int]:
-        """Assign tracks to the still free measurements, update them, return hit track ids.
+    ) -> tuple[set[int], list[tuple[int, int]]]:
+        """Assign tracks to the still free measurements, update them; return the outcome.
 
         Measurements taken by a track are cleared in `free`.
+
+        Returns:
+            The ids of the tracks that were updated, and the (track id, row of z) pairs.
         """
         columns = np.flatnonzero(free)
         if not tracks or columns.size == 0:
-            return set()
+            return set(), []
         costs = gated_costs(
             [t.filter for t in tracks], z[columns], model, gate, self.config.min_range
         )
         assignment = gated_assignment(costs.cost, costs.in_gate)
         hits = set()
+        pairs = []
         for row, col in assignment.pairs:
             tracks[row].filter.update(z[columns[col]], model)
             tracks[row].coast_steps = 0
             free[columns[col]] = False
             hits.add(tracks[row].track_id)
-        return hits
+            pairs.append((tracks[row].track_id, int(columns[col])))
+        return hits, pairs
 
     def _end_of_outage_step(self) -> None:
         """Delete what an aware tracker gives up on during a radar outage step.
@@ -323,7 +354,7 @@ class MultiTargetTracker:
         hits: set[int] = set()
         for status in (TrackStatus.CONFIRMED, TrackStatus.TENTATIVE):
             group = [t for t in existing if t.status is status]
-            hits |= self._associate(group, z, free, self._radar_model, self._radar_gate)
+            hits |= self._associate(group, z, free, self._radar_model, self._radar_gate)[0]
 
         for track in existing:
             track.lifecycle = advance(
@@ -361,7 +392,7 @@ class MultiTargetTracker:
         np.fill_diagonal(overlap, False)
         return {int(i) for i in np.flatnonzero(overlap.any(axis=1))}
 
-    def _camera_scan(self, z: np.ndarray) -> None:
+    def _camera_scan(self, z: np.ndarray) -> CameraStepLog:
         guard = max(self.config.min_range, MIN_RANGE)
         # The guard is on the distance from the camera the model assumes: close to it the
         # bearing Jacobian explodes. At the default position this is the range from the radar.
@@ -373,12 +404,17 @@ class MultiTargetTracker:
             and np.hypot(t.filter.x[0] - cx, t.filter.x[1] - cy) >= guard
         ]
         if not confirmed or len(z) == 0:
-            return
+            return CameraStepLog()
         ambiguous = self._ambiguous_camera_tracks(confirmed)
         self.camera_skipped += len(ambiguous)
         usable = [t for i, t in enumerate(confirmed) if i not in ambiguous]
-        self._associate(
+        _, pairs = self._associate(
             usable, z, np.ones(len(z), dtype=bool), self._camera_model, self._camera_gate
+        )
+        return CameraStepLog(
+            tuple(t.track_id for t in usable),
+            tuple(t.track_id for i, t in enumerate(confirmed) if i in ambiguous),
+            tuple(pairs),
         )
 
 
