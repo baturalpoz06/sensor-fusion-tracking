@@ -335,3 +335,57 @@ def seed_confidence_interval(values: np.ndarray, confidence: float = 0.95) -> Se
         valid.std(ddof=1) / np.sqrt(n)
     )
     return SeedInterval(mean, mean - half_width, mean + half_width, n)
+
+
+class PairedDifference(NamedTuple):
+    """Per-seed difference of two settings run on the same seeds, with a confidence interval.
+
+    Attributes:
+        mean: Mean of the per-seed differences a - b over the seeds where both are valid.
+        lower: Lower bound of the Student t interval of that mean; NaN with fewer than 2 pairs.
+        upper: Upper bound of the interval; NaN with fewer than 2 pairs.
+        median: Median of the per-seed differences (not the difference of the medians).
+        n_valid: Number of seeds where both values are finite.
+        n_dropped: Number of seeds left out because one or both values are not finite. A
+            setting that makes a score undefined in its worst seeds (no track matched) drops
+            exactly those seeds, so read the difference together with this count.
+    """
+
+    mean: float
+    lower: float
+    upper: float
+    median: float
+    n_valid: int
+    n_dropped: int
+
+
+def paired_difference(a: np.ndarray, b: np.ndarray, confidence: float = 0.95) -> PairedDifference:
+    """Mean and t interval of the per-seed differences a - b of two settings on the same seeds.
+
+    The seeds share their random draws across settings (common random numbers), so the
+    difference of the same seed removes the seed-to-seed variation that both settings share and
+    is a much tighter comparison than two separate intervals. Seeds where either value is not
+    finite are left out and counted in n_dropped.
+
+    Args:
+        a: Shape (n_seeds,) one score per seed of the first setting (e.g. the disturbed one).
+        b: Shape (n_seeds,) the same score of the second setting (e.g. the neutral one).
+        confidence: Coverage of the interval, strictly between 0 and 1.
+
+    Raises:
+        ValueError: If a and b do not have the same one-dimensional shape, or confidence is
+            not in (0, 1).
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if a.ndim != 1 or a.shape != b.shape:
+        raise ValueError(
+            f"a and b must have the same shape (n_seeds,), got {a.shape} and {b.shape}"
+        )
+    valid = np.isfinite(a) & np.isfinite(b)
+    difference = (a - b)[valid]
+    interval = seed_confidence_interval(difference, confidence)
+    median = float(np.median(difference)) if difference.size else np.nan
+    return PairedDifference(
+        interval.mean, interval.lower, interval.upper, median, interval.n_valid, int((~valid).sum())
+    )

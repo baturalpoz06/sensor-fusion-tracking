@@ -11,6 +11,7 @@ from fusion.mtt_metrics import (
     false_track_counts,
     first_match_times,
     match_tracks,
+    paired_difference,
     seed_confidence_interval,
 )
 from fusion.mtt_simulation import FieldOfView
@@ -309,3 +310,48 @@ def test_false_tracks_are_counted_only_after_the_burn_in():
         history[k].append(snapshot(99, (2000.0, 2000.0)))
     assert evaluate(TWO, history, burn_in_steps=0).false_track_rate == pytest.approx(10 / N_STEPS)
     assert evaluate(TWO, history, burn_in_steps=10).false_track_rate == 0.0
+
+
+# --- paired difference ---------------------------------------------------------------------
+
+
+def test_paired_difference_of_known_values():
+    """Fails if the difference has the wrong sign or the interval is not on the differences."""
+    a = np.array([3.0, 5.0, 4.0, 8.0])
+    b = np.array([1.0, 4.0, 4.0, 5.0])
+    result = paired_difference(a, b)
+    np.testing.assert_allclose(result.mean, 1.5)  # a - b = 2, 1, 0, 3
+    assert result.median == pytest.approx(1.5) and result.n_valid == 4 and result.n_dropped == 0
+    expected = seed_confidence_interval(a - b)
+    assert (result.lower, result.upper) == pytest.approx((expected.lower, expected.upper))
+    reverse = paired_difference(b, a)
+    assert reverse.mean == pytest.approx(-1.5) and reverse.lower == pytest.approx(-result.upper)
+
+
+def test_paired_difference_drops_and_counts_seeds_where_either_value_is_undefined():
+    """Fails if a pair with a NaN is kept, or the dropped seeds (survivorship) are not counted."""
+    a = np.array([2.0, np.nan, 4.0, 6.0, np.inf])
+    b = np.array([1.0, 3.0, np.nan, 2.0, 1.0])
+    result = paired_difference(a, b)
+    assert result.n_valid == 2 and result.n_dropped == 3
+    assert result.mean == pytest.approx(2.5) and result.median == pytest.approx(2.5)
+
+
+def test_a_paired_difference_is_tighter_than_two_separate_intervals_for_a_shared_seed_effect():
+    """Fails if pairing is not done per seed: a shift shared by both settings must cancel."""
+    seed_effect = np.random.default_rng(0).normal(0.0, 10.0, 50)
+    result = paired_difference(seed_effect + 1.0, seed_effect)
+    assert result.mean == pytest.approx(1.0)
+    assert result.upper - result.lower < 1e-9  # no variation left in the differences
+
+
+def test_paired_difference_with_too_few_pairs_has_no_interval_and_checks_its_input():
+    """Fails if one pair claims an interval, or mismatched inputs are accepted."""
+    one = paired_difference(np.array([3.0, np.nan]), np.array([1.0, 2.0]))
+    assert one.n_valid == 1 and one.mean == 2.0 and np.isnan(one.lower) and np.isnan(one.upper)
+    none = paired_difference(np.array([np.nan]), np.array([1.0]))
+    assert none.n_valid == 0 and np.isnan(none.mean) and np.isnan(none.median)
+    with pytest.raises(ValueError, match="same shape"):
+        paired_difference(np.zeros(3), np.zeros(4))
+    with pytest.raises(ValueError, match="confidence"):
+        paired_difference(np.zeros(3), np.ones(3), confidence=1.5)
