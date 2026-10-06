@@ -282,7 +282,8 @@ def criteria_lines(criteria: Sequence[Criterion], header: Sequence[str]) -> list
 
 def parameters_text(parameters: Parameters) -> str:
     """The parameters as the Python expression to put into improvement_experiment.FROZEN."""
-    winnable = ", ".join(repr(label) for label in parameters.winnable)
+    winnable = "".join(f"        {label!r},\n" for label in parameters.winnable)
+    winnable = f"(\n{winnable}    )" if parameters.winnable else "()"
     return (
         "Parameters(\n"
         f"    ekf_high_accel_std={parameters.ekf_high_accel_std!r},\n"
@@ -290,7 +291,7 @@ def parameters_text(parameters: Parameters) -> str:
         f"    imm_b_omega_deg={parameters.imm_b_omega_deg!r},\n"
         f"    imm_b_accel_std={parameters.imm_b_accel_std!r},\n"
         f"    bias_prior={parameters.bias_prior!r},\n"
-        f"    winnable=({winnable}{',' if parameters.winnable else ''}),\n"
+        f"    winnable={winnable},\n"
         f"    commit={parameters.commit!r},\n"
         ")"
     )

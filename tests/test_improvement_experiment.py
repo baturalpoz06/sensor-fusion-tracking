@@ -82,6 +82,35 @@ def test_the_random_streams_of_the_simulation_are_unchanged_and_nothing_is_appen
     )
 
 
+def test_the_frozen_parameters_are_grid_values_with_well_formed_block_labels():
+    """Fails if the frozen constants are not values the tuning could have chosen, or a winnable
+    label does not name a real layout, clutter rate and row."""
+    from fusion.improvement_experiment import (
+        BIAS_PRIOR_GRID,
+        EKF_HIGH_GRID,
+        FROZEN,
+        IMM_A_GRID,
+        IMM_B_ACCEL_GRID,
+        IMM_B_OMEGA_GRID_DEG,
+    )
+
+    if FROZEN is None:
+        pytest.skip("nothing is frozen yet")
+    assert FROZEN.ekf_high_accel_std in EKF_HIGH_GRID
+    assert FROZEN.imm_a_high_accel_std in IMM_A_GRID
+    assert FROZEN.imm_b_omega_deg in IMM_B_OMEGA_GRID_DEG
+    assert FROZEN.imm_b_accel_std in IMM_B_ACCEL_GRID
+    assert FROZEN.bias_prior in BIAS_PRIOR_GRID
+    assert FROZEN.commit and len(FROZEN.commit) == 40 and "dirty" not in FROZEN.commit
+    rows = {r.label for r in maneuver_block_rows(long_base(0.0), STATES, [Arm(BASELINE)])}
+    rows |= {r.label for r in held_out_rows(long_base(0.0), STATES, [Arm(BASELINE)])}
+    assert len(set(FROZEN.winnable)) == len(FROZEN.winnable)
+    for label in FROZEN.winnable:
+        layout, clutter, row = label.split(" | ")
+        assert layout in SCENARIOS and float(clutter) in (0.0, 5.0), label
+        assert row in rows and not row.endswith("neutral"), label
+
+
 def test_the_default_arm_leaves_the_tracker_configuration_unchanged():
     """Fails if the baseline arm alters any tracker setting."""
     base = TrackerConfig(dt=0.1, accel_std=0.5, velocity_std=20.0)

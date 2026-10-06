@@ -14,6 +14,7 @@ import pytest
 
 from fusion.improvement_experiment import (
     BASELINE,
+    FROZEN,
     UNFROZEN_DEFAULTS,
     Block,
     ImprovementRow,
@@ -66,7 +67,8 @@ def test_the_pilot_writes_every_table_the_headline_and_the_verdicts(pilot):
     ):
         text = (pilot / name).read_text(encoding="utf-8")
         assert "PILOT: a does-it-run check" in text, name
-        assert "UNFROZEN" in text, name
+        # Placeholder parameters are announced; frozen ones are used (and not announced) once set.
+        assert ("UNFROZEN" in text) == (FROZEN is None), name
     maneuver = (pilot / "improvement_maneuver.txt").read_text(encoding="utf-8")
     for heading in (
         "scores (Phase 6)",

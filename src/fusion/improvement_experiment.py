@@ -95,7 +95,63 @@ class Parameters:
 # Placeholders for runs that must work before anything is tuned (tests, the pilot). The
 # evaluation refuses to run with them: it needs FROZEN.
 UNFROZEN_DEFAULTS = Parameters(2.0, 3.0, 10.0, 1.0, 0.5)
-FROZEN: Parameters | None = None
+# Frozen from the tuning run (seeds 1000-1019, results/improvement_tune.txt) at the commit named
+# below, before any evaluation seed was used. All four choices are the fallback of the
+# pre-registered rules (no candidate met the neutral margins on 20 seeds): the least violating
+# candidate of each family was taken. 7.5 is the grid value (the tuning text printed it as
+# 7.499999999999999 after a degrees-radians round trip).
+FROZEN: Parameters | None = Parameters(
+    ekf_high_accel_std=1.0,
+    imm_a_high_accel_std=2.0,
+    imm_b_omega_deg=7.5,
+    imm_b_accel_std=2.0,
+    bias_prior=0.01,
+    winnable=(
+        'crossing | 0 | turn 10 deg/s',
+        'crossing | 0 | turn 20 deg/s',
+        'crossing | 0 | acceleration 2 m/s^2',
+        'crossing | 0 | acceleration 4 m/s^2',
+        'crossing | 0 | random turns <= 10 deg/s',
+        'crossing | 0 | random turns <= 20 deg/s',
+        'crossing | 0 | held-out turn 7 deg/s',
+        'crossing | 0 | held-out turn 15 deg/s',
+        'crossing | 0 | held-out acceleration 3 m/s^2',
+        'crossing | 5 | turn 5 deg/s',
+        'crossing | 5 | turn 10 deg/s',
+        'crossing | 5 | turn 20 deg/s',
+        'crossing | 5 | acceleration 1 m/s^2',
+        'crossing | 5 | acceleration 2 m/s^2',
+        'crossing | 5 | acceleration 4 m/s^2',
+        'crossing | 5 | random turns <= 10 deg/s',
+        'crossing | 5 | random turns <= 20 deg/s',
+        'crossing | 5 | held-out turn 7 deg/s',
+        'crossing | 5 | held-out turn 15 deg/s',
+        'crossing | 5 | held-out acceleration 3 m/s^2',
+        'separated | 0 | turn 5 deg/s',
+        'separated | 0 | turn 10 deg/s',
+        'separated | 0 | turn 20 deg/s',
+        'separated | 0 | acceleration 2 m/s^2',
+        'separated | 0 | acceleration 4 m/s^2',
+        'separated | 0 | random turns <= 5 deg/s',
+        'separated | 0 | random turns <= 10 deg/s',
+        'separated | 0 | random turns <= 20 deg/s',
+        'separated | 0 | held-out turn 7 deg/s',
+        'separated | 0 | held-out turn 15 deg/s',
+        'separated | 0 | held-out acceleration 3 m/s^2',
+        'separated | 5 | turn 5 deg/s',
+        'separated | 5 | turn 10 deg/s',
+        'separated | 5 | turn 20 deg/s',
+        'separated | 5 | acceleration 2 m/s^2',
+        'separated | 5 | acceleration 4 m/s^2',
+        'separated | 5 | random turns <= 5 deg/s',
+        'separated | 5 | random turns <= 10 deg/s',
+        'separated | 5 | random turns <= 20 deg/s',
+        'separated | 5 | held-out turn 7 deg/s',
+        'separated | 5 | held-out turn 15 deg/s',
+        'separated | 5 | held-out acceleration 3 m/s^2',
+    ),
+    commit='3354afccc3fc0a15f5c2a881610184be8e2d32f0',
+)
 
 
 @dataclass(frozen=True)
