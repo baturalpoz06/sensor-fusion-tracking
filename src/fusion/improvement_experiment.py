@@ -590,3 +590,33 @@ def improvement_sweep(
                     metrics[f][a, j] = trial[name][f]
         results.append(RowResult(row.label, row.group, names, tuple(seeds), metrics))
     return results
+
+
+class BlockResult(NamedTuple):
+    """The results of the rows of one block.
+
+    Attributes:
+        title: Title of the block.
+        layout: Layout (scene) name.
+        clutter: Clutter rate of the block.
+        rows: One RowResult per row of the block.
+    """
+
+    title: str
+    layout: str
+    clutter: float
+    rows: list[RowResult]
+
+
+def run_blocks(
+    blocks: Sequence[Block], seeds: Sequence[int], workers: int = 1
+) -> list[BlockResult]:
+    """Run every row of every block in one process pool and return the results by block."""
+    flat = [row for block in blocks for row in block.rows]
+    results = improvement_sweep(flat, seeds, workers)
+    out, start = [], 0
+    for block in blocks:
+        stop = start + len(block.rows)
+        out.append(BlockResult(block.title, block.layout, block.clutter, results[start:stop]))
+        start = stop
+    return out
