@@ -159,3 +159,31 @@ def test_radar_ekf_position_rmse_beats_raw_radar_measurements():
     raw_rmse = rmse(raw_xy)
     # Observed: EKF 2.2 m vs raw 6.7 m (ratio 0.33; 0.27-0.33 over other seeds).
     assert ekf_rmse < 0.5 * raw_rmse
+
+
+def test_ekf_update_is_pure_and_matches_the_filter_method_bitwise():
+    """Fails if the pure update changes its inputs or differs from ExtendedKalmanFilter.update."""
+    from fusion.filters.ekf import ekf_update
+
+    model = RadarModel(range_std=5.0, bearing_std=float(np.deg2rad(2.0)))
+    x0 = np.array([600.0, 400.0, 3.0, -2.0])
+    cov0 = np.diag([30.0, 40.0, 4.0, 5.0])
+    z = np.array([725.0, 0.60])
+    x_in, cov_in = x0.copy(), cov0.copy()
+    result = ekf_update(x_in, cov_in, z, model)
+    np.testing.assert_array_equal(x_in, x0)
+    np.testing.assert_array_equal(cov_in, cov0)
+    ekf = ExtendedKalmanFilter(dt=0.1, accel_std=0.5, x0=x0, P0=cov0)
+    ekf.update(z, model)
+    np.testing.assert_array_equal(ekf.x, result.x)
+    np.testing.assert_array_equal(ekf.P, result.P)
+    assert result.K.shape == (4, 2) and result.S.shape == (2, 2) and result.residual.shape == (2,)
+
+
+def test_cv_builders_match_the_filter_matrices():
+    """Fails if the extracted builders differ from the matrices the filters use."""
+    from fusion.filters.base import cv_process_noise, cv_transition
+
+    ekf = ExtendedKalmanFilter(dt=0.1, accel_std=0.7, x0=np.zeros(4), P0=np.eye(4))
+    np.testing.assert_array_equal(ekf.F, cv_transition(0.1))
+    np.testing.assert_array_equal(ekf.Q, cv_process_noise(0.1, 0.7))

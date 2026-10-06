@@ -3,6 +3,35 @@
 import numpy as np
 
 
+def cv_transition(dt: float) -> np.ndarray:
+    """Shape (4, 4) constant-velocity transition matrix for state [x, y, vx, vy]."""
+    return np.array(
+        [
+            [1.0, 0.0, dt, 0.0],
+            [0.0, 1.0, 0.0, dt],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+
+
+def cv_process_noise(dt: float, accel_std: float) -> np.ndarray:
+    """Shape (4, 4) process noise of a random acceleration held constant over one step.
+
+    The acceleration moves position by a*dt^2/2 and velocity by a*dt, matching the simulator
+    in fusion.scenario.
+    """
+    G = np.array(  # noqa: N806 - standard Kalman filter notation
+        [
+            [0.5 * dt**2, 0.0],
+            [0.0, 0.5 * dt**2],
+            [dt, 0.0],
+            [0.0, dt],
+        ]
+    )
+    return accel_std**2 * G @ G.T
+
+
 class CVFilterBase:
     """State, covariance and prediction step for a 2D constant-velocity model.
 
@@ -40,26 +69,8 @@ class CVFilterBase:
         if self.P.shape != (4, 4):
             raise ValueError(f"P0 must have shape (4, 4), got {self.P.shape}")
 
-        self.F = np.array(
-            [
-                [1.0, 0.0, dt, 0.0],
-                [0.0, 1.0, 0.0, dt],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ]
-        )
-
-        # Acceleration held constant over one step moves position by a*dt^2/2 and
-        # velocity by a*dt, matching the simulator in fusion.scenario.
-        G = np.array(  # noqa: N806 - standard Kalman filter notation
-            [
-                [0.5 * dt**2, 0.0],
-                [0.0, 0.5 * dt**2],
-                [dt, 0.0],
-                [0.0, dt],
-            ]
-        )
-        self.Q = accel_std**2 * G @ G.T
+        self.F = cv_transition(dt)
+        self.Q = cv_process_noise(dt, accel_std)
 
     def predict(self) -> None:
         """Propagate the state and covariance one time step forward."""
