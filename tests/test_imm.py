@@ -85,6 +85,30 @@ def test_mixing_uses_the_transition_matrix_the_right_way_round_with_the_spread_t
     np.testing.assert_allclose(mixed[0, 1, 1], 1.0, rtol=1e-14)
 
 
+def test_predict_starts_every_mode_from_the_mixed_estimate():
+    """Fails if predict skips the mixing (each mode would keep its own state), or applies it with
+    the transposed matrix, or leaves the spread term out of the mode covariance.
+
+    Same hand numbers as the mixing test, through IMMFilter.predict with two constant-velocity
+    modes without process noise (x only moves with vx = 0, so x stays at the mixed value; the
+    covariance gains dt^2 from the velocity variance 1).
+    """
+    mode = cv_mode(DT, 0.0)
+    imm = IMMFilter(
+        [mode, mode],
+        np.array([[0.9, 0.1], [0.3, 0.7]]),
+        np.zeros(4),
+        np.eye(4),
+        mu0=np.array([0.6, 0.4]),
+    )
+    imm._x_modes[1] = np.array([10.0, 0.0, 0.0, 0.0])
+    imm.predict()
+    np.testing.assert_allclose(imm.x_modes[:, 0], [20 / 11, 140 / 17], rtol=1e-13)
+    np.testing.assert_allclose(imm.mu, [0.66, 0.34], rtol=1e-13)
+    np.testing.assert_allclose(imm.P_modes[0, 0, 0], 1 + 19800 / 1331 + DT**2, rtol=1e-12)
+    np.testing.assert_allclose(imm.P_modes[1, 0, 0], 1 + 71400 / 4913 + DT**2, rtol=1e-12)
+
+
 def test_probability_update_matches_hand_numbers():
     """Fails if the likelihood does not multiply the predicted probability: c = [.6, .4] and
     likelihoods [.2, .05] give [.12, .02] / .14."""

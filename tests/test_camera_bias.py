@@ -108,11 +108,15 @@ def test_the_outlier_gate_rejects_a_wild_pair_and_leaves_the_estimate_unchanged(
 
 
 def test_the_gate_is_centered_on_zero_so_a_correct_pair_is_not_lost_with_a_wrong_estimate():
-    """Fails if the gate follows b_hat: a pair at the true bias must pass a stale estimate."""
+    """Fails if the gate follows b_hat: a pair near zero must pass a badly wrong estimate.
+
+    With b_hat = +4 deg a gate centered on b_hat (half width 5.8 deg) would reject a pair at
+    -2 deg (6 deg away); the fixed gate centered on zero accepts it.
+    """
     est = make("always")
-    est._b1 = -4.0 * DEG  # a badly wrong estimate
+    est._b1 = 4.0 * DEG
     assert est.gate_half_width > 5.0 * DEG
-    est.update([0.5 * DEG])
+    est.update([-2.0 * DEG])
     assert est.rejected == 0 and est.used == 1
 
 
