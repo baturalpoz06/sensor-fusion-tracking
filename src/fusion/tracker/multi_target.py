@@ -12,10 +12,12 @@ from fusion.association.gating import gate_threshold, gated_costs, innovation_co
 from fusion.dropout import STEP_TOLERANCE
 from fusion.filters.ekf import ExtendedKalmanFilter
 from fusion.filters.imm import IMMFilter, MotionConfig
+from fusion.filters.sensitivity import SensitivityEKF, correct_output
 from fusion.mtt_simulation import MttSimulation
 from fusion.sensors.base import MIN_RANGE, MeasurementModel
 from fusion.sensors.camera import CameraModel
 from fusion.sensors.radar import RadarModel, radar_initial_estimate
+from fusion.tracker.camera_bias import BiasLogEntry, CameraBiasConfig, CameraBiasEstimator
 from fusion.tracker.track import Lifecycle, LifecycleConfig, Track, TrackStatus, advance
 
 OUTAGE_POLICIES = ("unaware", "aware")
@@ -56,9 +58,13 @@ class TrackerConfig:
         motion: IMM motion model of every track, or None for the plain constant-velocity
             EKF. Gating, association cost and the camera ambiguity rule then use the
             combined (mixed) estimate of each track.
+        camera_bias: Global camera bearing bias estimate, or None for none. The tracks run
+            on the raw camera data exactly as without it; each carries the sensitivity of its
+            estimate to a constant camera bias, and the reported snapshots are corrected by
+            the shared estimate (x - V b, P + V var V^T). Needs use_camera.
         record_diagnostics: Whether the tracker keeps its per-step logs (camera_log,
-            mode_log). Nothing inside the tracker reads them; turning them off must not
-            change a track.
+            mode_log, bias_log). Nothing inside the tracker reads them; turning them off must
+            not change a track.
     """
 
     dt: float
@@ -72,6 +78,7 @@ class TrackerConfig:
     aware_tentatives: str = "drop"
     max_coast_time: float = 15.0
     motion: MotionConfig | None = None
+    camera_bias: CameraBiasConfig | None = None
     record_diagnostics: bool = True
 
     @property
@@ -89,6 +96,8 @@ class TrackerConfig:
                 f"aware_tentatives must be one of {TENTATIVE_POLICIES}, "
                 f"got {self.aware_tentatives!r}"
             )
+        if self.camera_bias is not None and not self.use_camera:
+            raise ValueError("camera_bias requires use_camera")
         if self.dt <= 0.0:
             raise ValueError(f"dt must be > 0, got {self.dt}")
         if self.accel_std < 0.0:
@@ -182,6 +191,10 @@ class MultiTargetTracker:
             if record_diagnostics is off).
         mode_log: One tuple of ModeLogEntry (the IMM tracks) per call of step, in order
             (diagnostic only; empty without a motion model or without diagnostics).
+        bias_log: One BiasLogEntry per call of step, in order (diagnostic only; empty without
+            camera_bias or without diagnostics).
+        bias_pairs_excluded: Radar-camera pairs left out because the radar measurement lay in
+            the gate of more than one confirmed track.
         camera_offered: Camera scans offered to confirmed tracks so far (track-scan pairs).
         camera_accepted: Of those, the updates made (a measurement passed the gate).
     """
@@ -217,6 +230,21 @@ class MultiTargetTracker:
         self.tentative_drops = 0
         self.camera_log: list[CameraStepLog] = []
         self.mode_log: list[tuple[ModeLogEntry, ...]] = []
+        self.bias_log: list[BiasLogEntry] = []
+        self.bias_pairs_excluded = 0
+        self._bias = (
+            CameraBiasEstimator(
+                config.camera_bias,
+                float(np.sqrt(radar_model.R[1, 1])),
+                float(np.sqrt(camera_model.R[0, 0])),
+            )
+            if config.camera_bias is not None
+            else None
+        )
+        # Radar rows taken by the confirmed tracks of the current step, and rows lying in the
+        # gate of several of them (working state of the bias pairs, reset every step).
+        self._radar_rows: dict[int, int] = {}
+        self._radar_shared: set[int] = set()
         self.camera_offered = 0
         self.camera_accepted = 0
 
@@ -253,10 +281,13 @@ class MultiTargetTracker:
         lifecycle: Lifecycle | None = None,
     ) -> Track:
         cfg = self.config
-        if cfg.motion is None:
-            track_filter = ExtendedKalmanFilter(dt=cfg.dt, accel_std=cfg.accel_std, x0=x, P0=P)
+        with_bias = cfg.camera_bias is not None
+        if cfg.motion is not None:
+            track_filter = cfg.motion.build(cfg.dt, cfg.accel_std, x, P, sensitivity=with_bias)
+        elif with_bias:
+            track_filter = SensitivityEKF(dt=cfg.dt, accel_std=cfg.accel_std, x0=x, P0=P)
         else:
-            track_filter = cfg.motion.build(cfg.dt, cfg.accel_std, x, P)
+            track_filter = ExtendedKalmanFilter(dt=cfg.dt, accel_std=cfg.accel_std, x0=x, P0=P)
         track = Track(
             self._next_id,
             track_filter,
@@ -298,6 +329,10 @@ class MultiTargetTracker:
         if aware_outage and radar is not None and len(radar) > 0:
             raise ValueError("the radar is down, but radar measurements were given")
 
+        self._radar_rows = {}
+        self._radar_shared = set()
+        if self._bias is not None:
+            self._bias.predict(self.config.dt)
         for track in self._tracks:
             track.filter.predict()
             track.coast_steps += 1
@@ -308,6 +343,8 @@ class MultiTargetTracker:
             self.camera_log.append(entry)
         self.camera_offered += len(entry.usable)
         self.camera_accepted += len(entry.assigned)
+        if self._bias is not None:
+            self._update_bias(radar, camera, entry)
         if aware_outage:
             self._end_of_outage_step()
         if self.config.record_diagnostics and self.config.motion is not None:
@@ -320,10 +357,40 @@ class MultiTargetTracker:
                     if isinstance(t.filter, IMMFilter)
                 )
             )
-        return [
-            TrackSnapshot(t.track_id, t.status, t.filter.x.copy(), t.filter.P.copy())
-            for t in self._tracks
-        ]
+        if self._bias is not None and self.config.record_diagnostics:
+            self.bias_log.append(self._bias.log_entry())
+        return [self._snapshot(t) for t in self._tracks]
+
+    def _snapshot(self, track: Track) -> TrackSnapshot:
+        """Copy of a track's estimate, corrected by the bias estimate if there is one."""
+        x, cov = track.filter.x.copy(), track.filter.P.copy()
+        if self._bias is not None:
+            bias, variance = self._bias.estimate
+            if bias != 0.0 or variance != 0.0:
+                x, cov = correct_output(x, cov, track.filter.V, bias, variance)
+        return TrackSnapshot(track.track_id, track.status, x, cov)
+
+    def _update_bias(
+        self, radar: np.ndarray | None, camera: np.ndarray | None, entry: CameraStepLog
+    ) -> None:
+        """Feed the bias estimate the radar-camera bearing pairs of this step.
+
+        A pair is a track that was confirmed when this step's radar scan was associated and
+        took a radar measurement and a camera measurement now; pairs whose radar measurement
+        lies in the gate of several confirmed tracks are left out (the match may be wrong).
+        """
+        deltas = []
+        if radar is not None and camera is not None and self._radar_rows:
+            camera_rows = dict(entry.assigned)
+            for track_id in sorted(self._radar_rows):
+                row = self._radar_rows[track_id]
+                if track_id not in camera_rows:
+                    continue
+                if row in self._radar_shared:
+                    self.bias_pairs_excluded += 1
+                    continue
+                deltas.append(float(camera[camera_rows[track_id], 0] - radar[row, 1]))
+        self._bias.update(deltas)
 
     @staticmethod
     def _as_scan(z: np.ndarray | None, model: MeasurementModel | None) -> np.ndarray | None:
@@ -344,20 +411,22 @@ class MultiTargetTracker:
         free: np.ndarray,
         model: MeasurementModel,
         gate: float,
-    ) -> tuple[set[int], list[tuple[int, int]]]:
+    ) -> tuple[set[int], list[tuple[int, int]], set[int]]:
         """Assign tracks to the still free measurements, update them; return the outcome.
 
         Measurements taken by a track are cleared in `free`.
 
         Returns:
-            The ids of the tracks that were updated, and the (track id, row of z) pairs.
+            The ids of the tracks that were updated, the (track id, row of z) pairs, and the
+            rows of z that lie in the gate of more than one of the tracks.
         """
         columns = np.flatnonzero(free)
         if not tracks or columns.size == 0:
-            return set(), []
+            return set(), [], set()
         costs = gated_costs(
             [t.filter for t in tracks], z[columns], model, gate, self.config.min_range
         )
+        shared = {int(columns[c]) for c in np.flatnonzero(costs.in_gate.sum(axis=0) > 1)}
         assignment = gated_assignment(costs.cost, costs.in_gate)
         hits = set()
         pairs = []
@@ -367,7 +436,7 @@ class MultiTargetTracker:
             free[columns[col]] = False
             hits.add(tracks[row].track_id)
             pairs.append((tracks[row].track_id, int(columns[col])))
-        return hits, pairs
+        return hits, pairs, shared
 
     def _end_of_outage_step(self) -> None:
         """Delete what an aware tracker gives up on during a radar outage step.
@@ -396,7 +465,13 @@ class MultiTargetTracker:
         hits: set[int] = set()
         for status in (TrackStatus.CONFIRMED, TrackStatus.TENTATIVE):
             group = [t for t in existing if t.status is status]
-            hits |= self._associate(group, z, free, self._radar_model, self._radar_gate)[0]
+            group_hits, group_pairs, shared = self._associate(
+                group, z, free, self._radar_model, self._radar_gate
+            )
+            hits |= group_hits
+            if status is TrackStatus.CONFIRMED:
+                self._radar_rows = dict(group_pairs)
+                self._radar_shared = shared
 
         for track in existing:
             track.lifecycle = advance(
@@ -450,7 +525,7 @@ class MultiTargetTracker:
         ambiguous = self._ambiguous_camera_tracks(confirmed)
         self.camera_skipped += len(ambiguous)
         usable = [t for i, t in enumerate(confirmed) if i not in ambiguous]
-        _, pairs = self._associate(
+        _, pairs, _ = self._associate(
             usable, z, np.ones(len(z), dtype=bool), self._camera_model, self._camera_gate
         )
         return CameraStepLog(
