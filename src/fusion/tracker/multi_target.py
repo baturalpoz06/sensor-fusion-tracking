@@ -11,6 +11,7 @@ from fusion.association.assignment import gated_assignment
 from fusion.association.gating import gate_threshold, gated_costs, innovation_covariance
 from fusion.dropout import STEP_TOLERANCE
 from fusion.filters.ekf import ExtendedKalmanFilter
+from fusion.filters.imm import IMMFilter, MotionConfig
 from fusion.mtt_simulation import MttSimulation
 from fusion.sensors.base import MIN_RANGE, MeasurementModel
 from fusion.sensors.camera import CameraModel
@@ -52,6 +53,12 @@ class TrackerConfig:
             camera update that resets a track's clock is skipped when the bearing gates of
             two confirmed tracks overlap, so two close real targets can both be deleted
             in a radar outage longer than this.
+        motion: IMM motion model of every track, or None for the plain constant-velocity
+            EKF. Gating, association cost and the camera ambiguity rule then use the
+            combined (mixed) estimate of each track.
+        record_diagnostics: Whether the tracker keeps its per-step logs (camera_log,
+            mode_log). Nothing inside the tracker reads them; turning them off must not
+            change a track.
     """
 
     dt: float
@@ -64,6 +71,8 @@ class TrackerConfig:
     outage_policy: str = "unaware"
     aware_tentatives: str = "drop"
     max_coast_time: float = 15.0
+    motion: MotionConfig | None = None
+    record_diagnostics: bool = True
 
     @property
     def max_coast_steps(self) -> int:
@@ -114,6 +123,20 @@ class CameraStepLog(NamedTuple):
     assigned: tuple[tuple[int, int], ...] = ()
 
 
+class ModeLogEntry(NamedTuple):
+    """Mode probabilities of one IMM track after a step; a diagnostic, never read.
+
+    Attributes:
+        track_id: Identifier of the track.
+        mu: Mode probabilities.
+        spread_trace: Trace of the spread-of-the-means part of the combined covariance.
+    """
+
+    track_id: int
+    mu: tuple[float, ...]
+    spread_trace: float
+
+
 class TrackSnapshot(NamedTuple):
     """Copy of one live track after a step.
 
@@ -155,7 +178,10 @@ class MultiTargetTracker:
         radar_scans: Number of radar scans processed so far (none during an aware outage).
         coast_deletions: Tracks deleted for coasting longer than max_coast_time.
         tentative_drops: Tentative tracks deleted at the start of an aware outage step.
-        camera_log: One CameraStepLog per call of step, in order (diagnostic only).
+        camera_log: One CameraStepLog per call of step, in order (diagnostic only; empty
+            if record_diagnostics is off).
+        mode_log: One tuple of ModeLogEntry (the IMM tracks) per call of step, in order
+            (diagnostic only; empty without a motion model or without diagnostics).
         camera_offered: Camera scans offered to confirmed tracks so far (track-scan pairs).
         camera_accepted: Of those, the updates made (a measurement passed the gate).
     """
@@ -190,6 +216,7 @@ class MultiTargetTracker:
         self.coast_deletions = 0
         self.tentative_drops = 0
         self.camera_log: list[CameraStepLog] = []
+        self.mode_log: list[tuple[ModeLogEntry, ...]] = []
         self.camera_offered = 0
         self.camera_accepted = 0
 
@@ -226,9 +253,13 @@ class MultiTargetTracker:
         lifecycle: Lifecycle | None = None,
     ) -> Track:
         cfg = self.config
+        if cfg.motion is None:
+            track_filter = ExtendedKalmanFilter(dt=cfg.dt, accel_std=cfg.accel_std, x0=x, P0=P)
+        else:
+            track_filter = cfg.motion.build(cfg.dt, cfg.accel_std, x, P)
         track = Track(
             self._next_id,
-            ExtendedKalmanFilter(dt=cfg.dt, accel_std=cfg.accel_std, x0=x, P0=P),
+            track_filter,
             lifecycle if lifecycle is not None else Lifecycle.born(cfg.lifecycle),
         )
         self._next_id += 1
@@ -273,11 +304,22 @@ class MultiTargetTracker:
         if radar is not None and not aware_outage:
             self._radar_scan(radar)
         entry = self._camera_scan(camera) if camera is not None else CameraStepLog()
-        self.camera_log.append(entry)
+        if self.config.record_diagnostics:
+            self.camera_log.append(entry)
         self.camera_offered += len(entry.usable)
         self.camera_accepted += len(entry.assigned)
         if aware_outage:
             self._end_of_outage_step()
+        if self.config.record_diagnostics and self.config.motion is not None:
+            self.mode_log.append(
+                tuple(
+                    ModeLogEntry(
+                        t.track_id, tuple(float(m) for m in t.filter.mu), t.filter.spread_trace
+                    )
+                    for t in self._tracks
+                    if isinstance(t.filter, IMMFilter)
+                )
+            )
         return [
             TrackSnapshot(t.track_id, t.status, t.filter.x.copy(), t.filter.P.copy())
             for t in self._tracks

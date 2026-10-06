@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple
 
-from fusion.filters.ekf import ExtendedKalmanFilter
+from fusion.filters.base import TrackFilter
 
 
 class TrackStatus(Enum):
@@ -109,14 +109,14 @@ class Track:
 
     Attributes:
         track_id: Unique identifier, never reused.
-        filter: EKF holding the state estimate and covariance.
+        filter: Filter (EKF or IMM) holding the state estimate and covariance.
         lifecycle: Current lifecycle counters.
         coast_steps: Steps since the last measurement update of any sensor (zero at birth).
             Only the aware outage policy acts on it.
     """
 
     track_id: int
-    filter: ExtendedKalmanFilter
+    filter: TrackFilter
     lifecycle: Lifecycle
     coast_steps: int = 0
 

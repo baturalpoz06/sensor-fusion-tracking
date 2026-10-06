@@ -7,7 +7,7 @@ import numpy as np
 from scipy.stats import chi2
 
 from fusion.angles import wrap_angle
-from fusion.filters.base import CVFilterBase
+from fusion.filters.base import TrackFilter
 from fusion.sensors.base import MIN_RANGE, MeasurementModel
 
 
@@ -116,7 +116,7 @@ class GatedCosts(NamedTuple):
 
 
 def gated_costs(
-    filters: Sequence[CVFilterBase],
+    filters: Sequence[TrackFilter],
     measurements: np.ndarray,
     model: MeasurementModel,
     threshold: float,

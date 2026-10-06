@@ -1,5 +1,7 @@
 """Shared constant-velocity motion model for the Kalman filter family."""
 
+from typing import Protocol
+
 import numpy as np
 
 
@@ -30,6 +32,25 @@ def cv_process_noise(dt: float, accel_std: float) -> np.ndarray:
         ]
     )
     return accel_std**2 * G @ G.T
+
+
+class TrackFilter(Protocol):
+    """What the tracker needs from a track filter: an estimate and predict / update steps.
+
+    Implemented by ExtendedKalmanFilter and by IMMFilter (whose x and P are the combined
+    estimate).
+    """
+
+    x: np.ndarray
+    P: np.ndarray
+
+    def predict(self) -> None:
+        """Propagate the estimate one step."""
+        ...
+
+    def update(self, z: np.ndarray, model) -> None:
+        """Correct the estimate with a measurement of the given sensor model."""
+        ...
 
 
 class CVFilterBase:

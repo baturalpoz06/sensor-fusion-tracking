@@ -12,7 +12,9 @@ With a single mode the filter is the plain EKF, bit for bit: that case skips mix
 combination (sums and einsums would turn signed zeros into positive zeros and change the bytes).
 """
 
+import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import numpy as np
@@ -205,6 +207,70 @@ def update_mode_probabilities(
         return predicted.copy(), False
     mu = np.exp(log_post - total)
     return mu / mu.sum(), True
+
+
+@dataclass(frozen=True)
+class ModeSpec:
+    """Recipe of one motion mode, in plain numbers (hashable and picklable).
+
+    Attributes:
+        kind: "cv" (constant velocity) or "ct" (coordinated turn at a fixed rate).
+        accel_std: Process noise acceleration std in m/s^2; None takes the tracker's own.
+        omega: Turn rate in rad/s of a "ct" mode (positive turns left); 0 for "cv".
+    """
+
+    kind: str = "cv"
+    accel_std: float | None = None
+    omega: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("cv", "ct"):
+            raise ValueError(f"kind must be 'cv' or 'ct', got {self.kind!r}")
+        if self.accel_std is not None and not (
+            math.isfinite(self.accel_std) and self.accel_std >= 0.0
+        ):
+            raise ValueError(f"accel_std must be finite and >= 0, got {self.accel_std}")
+        if not math.isfinite(self.omega) or (self.kind == "cv" and self.omega != 0.0):
+            raise ValueError(f"omega must be finite (and 0 for a cv mode), got {self.omega}")
+
+
+@dataclass(frozen=True)
+class MotionConfig:
+    """IMM motion model of the tracker: the modes and how they switch.
+
+    Attributes:
+        modes: Mode recipes, at least one.
+        stay_per_scan: Probability of keeping the mode over one radar scan (see
+            uniform_transition).
+        steps_per_scan: Filter steps per radar scan (radar_every of the scene).
+    """
+
+    modes: tuple[ModeSpec, ...]
+    stay_per_scan: float = 0.95
+    steps_per_scan: int = 10
+
+    def __post_init__(self) -> None:
+        if len(self.modes) < 1:
+            raise ValueError("a motion config needs at least one mode")
+        uniform_transition(self.stay_per_scan, len(self.modes), self.steps_per_scan)
+
+    def build(
+        self,
+        dt: float,
+        accel_std: float,
+        x0: np.ndarray,
+        P0: np.ndarray,  # noqa: N803 - standard notation
+    ) -> "IMMFilter":
+        """The IMM filter of a newborn track; modes without their own noise use accel_std."""
+        modes = []
+        for index, spec in enumerate(self.modes):
+            noise = accel_std if spec.accel_std is None else spec.accel_std
+            if spec.kind == "cv":
+                modes.append(cv_mode(dt, noise, f"cv{index}"))
+            else:
+                modes.append(ct_mode(dt, spec.omega, noise))
+        transition = uniform_transition(self.stay_per_scan, len(modes), self.steps_per_scan)
+        return IMMFilter(modes, transition, x0, P0)
 
 
 class IMMFilter:
