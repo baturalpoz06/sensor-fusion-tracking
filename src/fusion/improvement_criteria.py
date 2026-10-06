@@ -473,10 +473,11 @@ def criterion_hdrag(blocks: Sequence[BlockResult], arms: Sequence[str]) -> Crite
                 if arm == BASELINE or arm not in row.arm_names:
                     continue
                 diff = paired_difference(_drag_total(row, arm, start), base)
-                reduction = -diff.mean / float(np.nanmean(base)) if np.nanmean(base) else np.nan
+                base_mean = float(np.nanmean(base)) if np.isfinite(base).any() else np.nan
+                reduction = -diff.mean / base_mean if base_mean else np.nan
                 lines.append(
                     f"clutter {block.clutter:g}, {label}, {arm}: baseline "
-                    f"{np.nanmean(base):.4g}, d {_fmt(diff)}, reduction {reduction:.3g}"
+                    f"{base_mean:.4g}, d {_fmt(diff)}, reduction {reduction:.3g}"
                 )
                 if arm == "EKF high-Q":
                     supported = (

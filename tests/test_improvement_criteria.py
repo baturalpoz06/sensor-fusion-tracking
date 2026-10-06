@@ -218,6 +218,23 @@ def test_h_drag_reads_the_high_q_ekf_reduction_of_the_tail(effect, expected):
     assert any("seeds 10+" in line for line in result.lines)
 
 
+def test_h_drag_with_fewer_than_ten_seeds_has_no_late_seed_numbers_and_does_not_warn():
+    """Fails if the subset of the seeds from 10 on, empty in a 5-seed pilot, raises a warning or
+    changes the verdict."""
+    import warnings
+
+    row = drag_row(-0.15, 1)
+    short = RowResult(
+        row.label, row.group, row.arm_names, tuple(range(5)),
+        {name: values[:, :5] for name, values in row.metrics.items()},
+    )  # fmt: skip
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = criterion_hdrag([block([short])], ("EKF high-Q",))
+    assert result.verdict in ("SUPPORTED", "PARTIAL", "REFUTED")
+    assert any("seeds 10+" in line and "nan" in line for line in result.lines)
+
+
 def test_h_drag_is_not_applicable_without_the_separated_turn_row():
     """Fails if a crossing-only run gives a verdict."""
     crossing = block([drag_row(0.0)], layout="crossing")
