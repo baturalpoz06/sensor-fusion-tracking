@@ -167,15 +167,24 @@ def prior_name(prior: float) -> str:
     return "bias always" if prior >= 1.0 else f"bias p={prior:g}"
 
 
-def tuning_candidates() -> dict[str, list[Arm]]:
-    """The candidate arms of each tuned family, named after their parameters."""
+def tuning_candidates(small: bool = False) -> dict[str, list[Arm]]:
+    """The candidate arms of each tuned family, named after their parameters.
+
+    Args:
+        small: Use the first two values of each grid (one turn rate for IMM-B and two priors),
+            for quick checks that the machinery runs; never for the real tuning.
+    """
+    ekf_high, imm_a = EKF_HIGH_GRID, IMM_A_GRID
+    omegas, accels, priors = IMM_B_OMEGA_GRID_DEG, IMM_B_ACCEL_GRID, BIAS_PRIOR_GRID
+    if small:
+        ekf_high, imm_a, omegas, accels, priors = (
+            ekf_high[:2], imm_a[:2], omegas[:1], accels[:2], priors[:2]
+        )  # fmt: skip
     return {
-        "EKF high-Q": [Arm(f"EKF high-Q {a:g}", accel_std=a) for a in EKF_HIGH_GRID],
-        "IMM-A": [Arm(f"IMM-A {a:g}", modes=imm_a_modes(a)) for a in IMM_A_GRID],
+        "EKF high-Q": [Arm(f"EKF high-Q {a:g}", accel_std=a) for a in ekf_high],
+        "IMM-A": [Arm(f"IMM-A {a:g}", modes=imm_a_modes(a)) for a in imm_a],
         "IMM-B": [
-            Arm(f"IMM-B {w:g}/{a:g}", modes=imm_b_modes(w, a))
-            for w in IMM_B_OMEGA_GRID_DEG
-            for a in IMM_B_ACCEL_GRID
+            Arm(f"IMM-B {w:g}/{a:g}", modes=imm_b_modes(w, a)) for w in omegas for a in accels
         ],
         "bias": [
             Arm(
@@ -186,7 +195,7 @@ def tuning_candidates() -> dict[str, list[Arm]]:
                     else CameraBiasConfig(mode="spike_slab", prior_h1=p)
                 ),
             )
-            for p in BIAS_PRIOR_GRID
+            for p in priors
         ],
     }
 
@@ -362,11 +371,12 @@ def tuning_blocks(
     base_for_clutter: Callable[[float], RobustnessConfig],
     scenes: dict[str, np.ndarray],
     clutter_rates: Sequence[float],
+    small: bool = False,
 ) -> list[Block]:
     """The table sets of the tuning run: every candidate on the tuned rows, the baseline alone on
     the held-out rows (only to find the winnable blocks), the bias candidates on the bias rows.
     """
-    candidates = tuning_candidates()
+    candidates = tuning_candidates(small)
     everything = [Arm(BASELINE)] + [arm for family in candidates.values() for arm in family]
     bias_only = [Arm(BASELINE), *candidates["bias"]]
     blocks = []
