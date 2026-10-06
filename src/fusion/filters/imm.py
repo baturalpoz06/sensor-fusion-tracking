@@ -22,6 +22,7 @@ from scipy.special import logsumexp
 
 from fusion.filters.base import cv_process_noise, cv_transition
 from fusion.filters.ekf import ekf_update
+from fusion.filters.sensitivity import bias_jacobian
 from fusion.sensors.base import MeasurementModel
 
 
@@ -115,6 +116,16 @@ def uniform_transition(stay_per_scan: float, n_modes: int, steps_per_scan: int) 
     return off * np.ones((n_modes, n_modes)) + (stay - off) * np.eye(n_modes)
 
 
+def mixing_weights(transition: np.ndarray, mu: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Predicted mode probabilities c = Pi^T mu and mixing weights w_ij = pi_ij mu_i / c_j.
+
+    A mode with c_j = 0 mixes with the weights mu (only possible without a floor in Pi).
+    """
+    c = transition.T @ mu
+    weights = np.where(c > 0.0, transition * mu[:, None] / np.where(c > 0.0, c, 1.0), mu[:, None])
+    return c, weights
+
+
 def mix_modes(
     transition: np.ndarray,
     mu: np.ndarray,
@@ -137,8 +148,7 @@ def mix_modes(
     Returns:
         (c, x0, P0): predicted mode probabilities (M,), mixed states (M, 4), covariances (M, 4, 4).
     """
-    c = transition.T @ mu
-    weights = np.where(c > 0.0, transition * mu[:, None] / np.where(c > 0.0, c, 1.0), mu[:, None])
+    c, weights = mixing_weights(transition, mu)
     x0 = weights.T @ x_modes
     diff = x_modes[:, None, :] - x0[None, :, :]  # (i, j, 4)
     spread = np.einsum("ij,ija,ijb->jab", weights, diff, diff)
@@ -260,8 +270,13 @@ class MotionConfig:
         accel_std: float,
         x0: np.ndarray,
         P0: np.ndarray,  # noqa: N803 - standard notation
+        sensitivity: bool = False,
     ) -> "IMMFilter":
-        """The IMM filter of a newborn track; modes without their own noise use accel_std."""
+        """The IMM filter of a newborn track; modes without their own noise use accel_std.
+
+        With sensitivity the filter also carries the derivative of its estimate with respect
+        to a constant camera bearing bias (see IMMFilter).
+        """
         modes = []
         for index, spec in enumerate(self.modes):
             noise = accel_std if spec.accel_std is None else spec.accel_std
@@ -270,7 +285,7 @@ class MotionConfig:
             else:
                 modes.append(ct_mode(dt, spec.omega, noise))
         transition = uniform_transition(self.stay_per_scan, len(modes), self.steps_per_scan)
-        return IMMFilter(modes, transition, x0, P0)
+        return IMMFilter(modes, transition, x0, P0, sensitivity=sensitivity)
 
 
 class IMMFilter:
@@ -282,6 +297,10 @@ class IMMFilter:
         mu: Shape (M,) mode probabilities (a copy).
         likelihood_failures: Updates in which no mode had a usable likelihood (mu kept).
         spread_trace: Trace of the spread-of-the-means part of the combined covariance.
+        V: With sensitivity, the shape (4,) derivative of the combined state with respect to a
+            constant camera bearing bias (m per rad, zero at birth), otherwise None. Every mode
+            carries its own V_j, mixed like the states; the combination uses the current mode
+            probabilities (first order: their own dependence on the bias is ignored).
     """
 
     def __init__(
@@ -291,6 +310,7 @@ class IMMFilter:
         x0: np.ndarray,
         P0: np.ndarray,  # noqa: N803 - standard notation
         mu0: np.ndarray | None = None,
+        sensitivity: bool = False,
     ) -> None:
         """Start every mode from the same initial estimate.
 
@@ -300,6 +320,7 @@ class IMMFilter:
             x0: Shape (4,) initial state.
             P0: Shape (4, 4) initial covariance.
             mu0: Shape (M,) initial mode probabilities; uniform by default.
+            sensitivity: Whether to track the sensitivity V to a camera bias.
 
         Raises:
             ValueError: If a shape is wrong, or transition / mu0 are not probabilities.
@@ -326,6 +347,7 @@ class IMMFilter:
         self._x_modes = np.array([x0 for _ in range(n)])
         self._P_modes = np.array([P0 for _ in range(n)])  # noqa: N806
         self.likelihood_failures = 0
+        self._V_modes = np.zeros((n, 4)) if sensitivity else None  # noqa: N806
         self._combine()
 
     @property
@@ -365,15 +387,32 @@ class IMMFilter:
             self._x, self._P, self.spread_trace = combine_modes(
                 self._mu, self._x_modes, self._P_modes
             )
+        if self._V_modes is None:
+            self.V = None
+        elif len(self._modes) == 1:
+            self.V = self._V_modes[0]
+        else:
+            self.V = self._mu @ self._V_modes
+
+    @property
+    def V_modes(self) -> np.ndarray | None:  # noqa: N802 - standard notation
+        """Per-mode sensitivities, shape (M, 4) (a copy), or None without sensitivity."""
+        return None if self._V_modes is None else self._V_modes.copy()
 
     def predict(self) -> None:
         """Mix the modes, propagate each one step and set mu to the predicted probabilities."""
         if len(self._modes) == 1:
             mode = self._modes[0]
+            if self._V_modes is not None:
+                self._V_modes[0] = mode.F @ self._V_modes[0]
             self._x_modes[0] = mode.F @ self._x_modes[0]
             self._P_modes[0] = mode.F @ self._P_modes[0] @ mode.F.T + mode.Q
         else:
             c, x0, P0 = mix_modes(self._pi, self._mu, self._x_modes, self._P_modes)  # noqa: N806
+            if self._V_modes is not None:
+                v0 = mixing_weights(self._pi, self._mu)[1].T @ self._V_modes
+                for j, mode in enumerate(self._modes):
+                    self._V_modes[j] = mode.F @ v0[j]
             for j, mode in enumerate(self._modes):
                 self._x_modes[j] = mode.F @ x0[j]
                 self._P_modes[j] = mode.F @ P0[j] @ mode.F.T + mode.Q
@@ -389,6 +428,15 @@ class IMMFilter:
         """
         pairs = zip(self._x_modes, self._P_modes, strict=True)
         results = [ekf_update(x, cov, z, model) for x, cov in pairs]
+        if self._V_modes is not None:
+            j_b = bias_jacobian(model)
+            v_new = np.array(
+                [
+                    (np.eye(4) - r.K @ model.jacobian(x)) @ v + r.K @ j_b
+                    for r, x, v in zip(results, self._x_modes, self._V_modes, strict=True)
+                ]
+            )
+            self._V_modes = v_new  # noqa: N806
         if len(self._modes) == 1:
             self._x_modes[0], self._P_modes[0] = results[0].x, results[0].P
         else:
