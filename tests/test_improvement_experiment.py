@@ -82,6 +82,32 @@ def test_the_random_streams_of_the_simulation_are_unchanged_and_nothing_is_appen
     )
 
 
+def test_the_eval_config_has_the_frozen_high_q_arm_and_two_descriptive_controls():
+    """Fails if a control is missing from the maneuver evaluation, appears elsewhere, or changes
+    a frozen arm: the frozen high-Q arm keeps the frozen noise, the controls are 3 and 5."""
+    from fusion.improvement_experiment import CONTROL_ARMS, FROZEN, evaluation_blocks, named_arms
+
+    assert CONTROL_ARMS == ("EKF high-Q", "EKF high-Q 3", "EKF high-Q 5")
+    parameters = FROZEN or UNFROZEN_DEFAULTS
+    arms = named_arms(parameters)
+    assert arms["EKF high-Q"].accel_std == parameters.ekf_high_accel_std
+    assert arms["EKF high-Q 3"].accel_std == 3.0 and arms["EKF high-Q 5"].accel_std == 5.0
+    assert arms["IMM-A"].modes[1].accel_std == parameters.imm_a_high_accel_std
+    scenes = {"separated": STATES}
+    for group, expected in (("maneuver", True), ("bias", False), ("hard", False)):
+        block = evaluation_blocks(group, long_base, scenes, (0.0,), parameters)[0]
+        names = {a.name for row in block.rows for a in row.arms}
+        assert ("EKF high-Q 3" in names and "EKF high-Q 5" in names) is expected, group
+    # The controls reuse two settings of the tuning grid and leave the tuning run untouched:
+    # it still has its 21 arms per tuned row, with the same candidates as before.
+    grid = {a.name: a.accel_std for a in tuning_candidates()["EKF high-Q"]}
+    expected_grid = {1.0: "1", 2.0: "2", 3.0: "3", 5.0: "5"}
+    assert grid == {f"EKF high-Q {n}": q for q, n in expected_grid.items()}
+    block = tuning_blocks(long_base, {"separated": STATES}, (0.0,))[0]
+    tuned = [r for r in block.rows if r.group == "maneuver"]
+    assert all(len(r.arms) == 1 + 4 + 3 + 9 + 4 for r in tuned)
+
+
 def test_the_frozen_parameters_are_grid_values_with_well_formed_block_labels():
     """Fails if the frozen constants are not values the tuning could have chosen, or a winnable
     label does not name a real layout, clutter rate and row."""
@@ -278,7 +304,9 @@ def test_evaluation_blocks_use_the_planned_arms_per_group():
     """Fails if a group runs other arms than planned, or the block grid is wrong."""
     scenes = {"separated": STATES, "crossing": SCENARIOS["crossing"]}
     expected = {
-        "maneuver": (BASELINE, "EKF high-Q", "IMM-A", "IMM-B", "EKF+bias"),
+        "maneuver": (
+            BASELINE, "EKF high-Q", "EKF high-Q 3", "EKF high-Q 5", "IMM-A", "IMM-B", "EKF+bias"
+        ),  # fmt: skip
         "bias": (BASELINE, "EKF+bias", "EKF+always", "EKF+oracle"),
         "hard": (BASELINE, "EKF+bias", "IMM-A", "IMM-B", "IMM-A+bias", "IMM-B+bias"),
     }

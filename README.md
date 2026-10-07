@@ -70,6 +70,19 @@ python scripts/run_improvement_experiment.py --stage eval --pilot --workers 8
 python scripts/run_improvement_experiment.py --stage eval --workers 8
 ```
 
+The maneuver group also runs two descriptive control arms, a single EKF with a process
+noise of 3 and of 5 m/s^2, next to the frozen high-Q arm. They are not tuned and not criteria:
+a claim "IMM beats the high-Q EKF" is reported against all three (`CTRL` entries of
+`criteria_8b.txt`) and counts as PASS only against the strongest one. The evaluation is about
+28,400 tracker runs, roughly 90 minutes with 14 workers.
+
+Limitations of the frozen parameters: the four tuning selections were made by the fallback
+rule (no candidate met the neutral margins on the 20 tuning seeds, so the least violating one
+was taken); ties were broken toward the smaller value (EKF Q = 1 and Q = 2 both violated by 2.04
+margins; IMM-B 7.5/2 at 2.02 against 15/2 at 2.04 is a noise-level difference); and the
+id_switches margin is flagged `WIDER` in the tuning output and may be underpowered even at 50
+seeds. The same note is printed at the top of `criteria_8b.txt`.
+
 The last command refuses to run until the tuned values are set in
 `fusion.improvement_experiment.FROZEN` at a commit that is an ancestor of `HEAD` with no
 uncommitted changes to tracked files. It writes the tables, a numbers-only headline file and

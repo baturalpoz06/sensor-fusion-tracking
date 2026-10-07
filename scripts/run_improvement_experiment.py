@@ -17,7 +17,9 @@ Stages:
             verdicts results/criteria_8b.txt. It refuses to run unless FROZEN is set, was frozen
             at an ancestor of HEAD and the working tree has no uncommitted tracked changes.
             With --pilot it runs 5 tuning seeds into <out>/pilot with placeholder parameters (a
-            does-it-run check, no conclusions) and has no such conditions.
+            does-it-run check, no conclusions) and has no such conditions. The maneuver group also
+            runs two descriptive control arms, "EKF high-Q 3" and "EKF high-Q 5", next to the
+            frozen "EKF high-Q"; about 28,400 arm-runs in all, roughly 90 minutes with 14 workers.
 
 All arms of a row see the same simulated data (common random numbers); paired differences compare
 each arm with the baseline "EKF" seed by seed. No file this script writes interprets a result.

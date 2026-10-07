@@ -66,6 +66,12 @@ IMM_B_OMEGA_GRID_DEG = (7.5, 10.0, 15.0)
 IMM_B_ACCEL_GRID = (0.5, 1.0, 2.0)
 BIAS_PRIOR_GRID = (1.0, 0.5, 0.1, 0.01)  # 1.0 stands for "always apply"
 
+# Descriptive sensitivity controls next to the frozen EKF high-Q arm: single EKFs with a larger
+# process noise. They are not tuned, not new criteria and do not change the frozen parameters;
+# they only let a claim "IMM beats the high-Q EKF" be checked against stronger controls.
+EKF_CONTROL_Q = (3.0, 5.0)
+CONTROL_ARMS = ("EKF high-Q", "EKF high-Q 3", "EKF high-Q 5")
+
 
 @dataclass(frozen=True)
 class Parameters:
@@ -202,6 +208,8 @@ def named_arms(parameters: Parameters) -> dict[str, Arm]:
     return {
         BASELINE: Arm(BASELINE),
         "EKF high-Q": Arm("EKF high-Q", accel_std=parameters.ekf_high_accel_std),
+        "EKF high-Q 3": Arm("EKF high-Q 3", accel_std=EKF_CONTROL_Q[0]),
+        "EKF high-Q 5": Arm("EKF high-Q 5", accel_std=EKF_CONTROL_Q[1]),
         "IMM-A": Arm("IMM-A", modes=imm_a),
         "IMM-B": Arm("IMM-B", modes=imm_b),
         "EKF+bias": Arm("EKF+bias", camera_bias=bias),
@@ -400,7 +408,7 @@ def evaluation_blocks(
     """
     arms = named_arms(parameters)
     if group == "maneuver":
-        names = (BASELINE, "EKF high-Q", "IMM-A", "IMM-B", "EKF+bias")
+        names = (BASELINE, *CONTROL_ARMS, "IMM-A", "IMM-B", "EKF+bias")
     elif group == "bias":
         names = (BASELINE, "EKF+bias", "EKF+always")
     elif group == "hard":

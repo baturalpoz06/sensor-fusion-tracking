@@ -25,6 +25,7 @@ from scipy.stats import t as student_t
 
 from fusion.improvement_experiment import (
     BASELINE,
+    CONTROL_ARMS,
     BlockResult,
     Parameters,
     RowResult,
@@ -362,7 +363,11 @@ def _fmt(difference: PairedDifference) -> str:
 
 
 def criterion_a1(
-    blocks: Sequence[BlockResult], arm: str, winnable: Sequence[str], group: str
+    blocks: Sequence[BlockResult],
+    arm: str,
+    winnable: Sequence[str],
+    group: str,
+    reference: str = BASELINE,
 ) -> Criterion:
     """Primary criterion for an IMM arm on the maneuver rows of one group ("maneuver" or
     "held-out").
@@ -370,8 +375,13 @@ def criterion_a1(
     PASS: window missed rate improves in at least two thirds of the winnable row-blocks, and no
     row-block (winnable or not) worsens in window missed rate, ghost rate or ID switches.
     Common-support window RMSE is listed as a secondary score.
+
+    With a reference other than the baseline (a control arm) the differences are arm - reference;
+    the practical thresholds still come from the baseline's own degradation, and the secondary
+    common-support RMSE (computed against the baseline only) is left out.
     """
-    name = f"A1 {arm} ({group} rows)"
+    versus = "" if reference == BASELINE else f" vs {reference}"
+    name = f"A1 {arm}{versus} ({group} rows)"
     improved = worsened = total = 0
     lines = []
     secondary = []
@@ -381,11 +391,13 @@ def criterion_a1(
             neutral = _row(block, neutral_label(row))
             label = block_label(block, row)
             degradation = across_rows(row, neutral, "window_missed_rate", BASELINE).mean
-            missed = paired(row, "window_missed_rate", arm)
+            missed = paired(row, "window_missed_rate", arm, reference)
+            ghost = paired(row, "run_ghost_rate", arm, reference)
+            switches = paired(row, "run_id_switches", arm, reference)
             verdicts = {
                 "missed": judge(missed, practical_threshold("missed", degradation)),
-                "ghost": judge(paired(row, "run_ghost_rate", arm), practical_threshold("ghost")),
-                "id": judge(paired(row, "run_id_switches", arm), practical_threshold("id")),
+                "ghost": judge(ghost, practical_threshold("ghost")),
+                "id": judge(switches, practical_threshold("id")),
             }
             checks += 3
             if "worsens" in verdicts.values():
@@ -394,10 +406,12 @@ def criterion_a1(
             if in_set:
                 total += 1
                 improved += int(verdicts["missed"] == "improves")
-            rmse_deg = across_rows(row, neutral, "window_position_rmse", BASELINE).mean
-            rmse = judge(paired_cs(row, arm, "window"), practical_threshold("rmse", rmse_deg))
-            if rmse == "worsens":
-                secondary.append(label)
+            rmse = "n/a"
+            if reference == BASELINE:
+                rmse_deg = across_rows(row, neutral, "window_position_rmse", BASELINE).mean
+                rmse = judge(paired_cs(row, arm, "window"), practical_threshold("rmse", rmse_deg))
+                if rmse == "worsens":
+                    secondary.append(label)
             lines.append(
                 f"{label}{' [winnable]' if in_set else ''}: d window missed {_fmt(missed)} "
                 f"({verdicts['missed']}), ghost {verdicts['ghost']}, id {verdicts['id']}, "
@@ -413,6 +427,58 @@ def criterion_a1(
         return Criterion(name, "N/A", lines)
     passed = improved >= math.ceil(MISSED_RATIO_NEEDED * total) and worsened == 0
     return Criterion(name, "PASS" if passed else "FAIL", lines)
+
+
+def criterion_vs_controls(
+    blocks: Sequence[BlockResult],
+    arm: str,
+    winnable: Sequence[str],
+    group: str,
+    controls: Sequence[str] = CONTROL_ARMS,
+) -> Criterion:
+    """The claim "this IMM arm beats the high-Q EKF", reported against every control.
+
+    The primary criterion (see criterion_a1) is evaluated with each control arm as the
+    reference. The strongest control is the one with the lowest mean window missed rate over
+    the winnable row-blocks of the group (all rows if there are none). The claim is PASS only if
+    it holds against the strongest control; if it holds only against weaker controls the verdict
+    is "HOLDS ONLY VS WEAKER CONTROL" and they are named; otherwise FAIL. The extra controls are
+    descriptive, not new criteria, and the frozen high-Q arm is one of the three.
+    """
+    name = f"CTRL {arm} beats the high-Q controls ({group} rows)"
+    rows = [(b, r) for b in blocks for r in _maneuver_rows(b, group)]
+    present = [c for c in controls if rows and all(c in r.arm_names for _, r in rows)]
+    if not present:
+        return Criterion(name, "N/A", ["no control arm in these results"])
+    chosen = [r for b, r in rows if block_label(b, r) in winnable] or [r for _, r in rows]
+    strength = {
+        c: float(np.nanmean([np.nanmean(r.metrics["window_missed_rate"][arm_index(r, c)])
+                             for r in chosen]))
+        for c in present
+    }  # fmt: skip
+    strongest = min(present, key=lambda c: strength[c])
+    results = {c: criterion_a1(blocks, arm, winnable, group, reference=c) for c in present}
+    lines = [
+        "reporting rule: PASS only if the claim holds against the strongest control; the controls "
+        "are the frozen high-Q arm and two descriptive ones (Q = 3 and 5)",
+        f"strongest control (lowest mean window missed over {len(chosen)} rows): {strongest}",
+    ]
+    for c in present:
+        summary = [line for line in results[c].lines if line.startswith("improved ")]
+        lines.append(
+            f"vs {c}: mean window missed of the control {strength[c]:.4g}, {results[c].verdict}; "
+            + (summary[0] if summary else "")
+        )
+    if all(results[c].verdict == "N/A" for c in present):
+        verdict = "N/A"
+    elif results[strongest].verdict == "PASS":
+        verdict = "PASS"
+    else:
+        weaker = [c for c in present if c != strongest and results[c].verdict == "PASS"]
+        verdict = "HOLDS ONLY VS WEAKER CONTROL" if weaker else "FAIL"
+        if weaker:
+            lines.append(f"holds only against the weaker control(s): {', '.join(weaker)}")
+    return Criterion(name, verdict, lines)
 
 
 def _aggregate(results: list[str]) -> str:
@@ -616,7 +682,9 @@ def evaluate_all(
         criteria.append(criterion_a1(maneuver, arm, parameters.winnable, "maneuver"))
         criteria.append(criterion_a1(maneuver, arm, parameters.winnable, "held-out"))
         criteria.append(criterion_a2(maneuver, arm))
-    criteria.append(criterion_hdrag(maneuver, ("EKF high-Q", "IMM-A", "IMM-B")))
+        for group in ("maneuver", "held-out"):
+            criteria.append(criterion_vs_controls(maneuver, arm, parameters.winnable, group))
+    criteria.append(criterion_hdrag(maneuver, (*CONTROL_ARMS, "IMM-A", "IMM-B")))
     criteria.append(criterion_b1(bias))
     criteria.append(criterion_b2(bias))
     criteria.append(criterion_b3(maneuver))

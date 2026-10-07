@@ -89,6 +89,8 @@ def test_the_pilot_headline_lists_every_arm_of_every_row_and_only_numbers(pilot)
     for label in (
         "neutral | EKF [abs]",
         "turn 10 deg/s | IMM-B",
+        "turn 10 deg/s | EKF high-Q 3",
+        "random turns <= 20 deg/s | EKF high-Q 5",
         "random turns <= 20 deg/s | EKF+bias",
         "bias 1 deg | EKF+oracle",
         "bias 0.5 deg | EKF+always",
@@ -108,6 +110,8 @@ def test_the_criteria_file_has_a_verdict_per_pre_registered_criterion(pilot):
         "A1 IMM-B (held-out rows)",
         "A2 IMM-A (neutral non-inferiority)",
         "A2 IMM-B (neutral non-inferiority)",
+        "CTRL IMM-A beats the high-Q controls (maneuver rows)",
+        "CTRL IMM-B beats the high-Q controls (held-out rows)",
         "H-drag",
         "B1 EKF+bias",
         "B2 EKF+bias neutral equivalence",
@@ -117,6 +121,9 @@ def test_the_criteria_file_has_a_verdict_per_pre_registered_criterion(pilot):
     ):
         assert f"== {name}" in text, name
     assert text.rstrip().splitlines()[-1].startswith("verdicts: ")
+    assert "LIMITATIONS of the frozen parameters" in text
+    assert "fallback rule" in text and "2.04" in text and "WIDER" in text
+    assert text.index("LIMITATIONS") < text.index("== A1 IMM-A")
 
 
 def test_the_tuning_stage_applies_the_selection_and_prints_the_frozen_expression(tmp_path):

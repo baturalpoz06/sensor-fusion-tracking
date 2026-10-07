@@ -54,6 +54,17 @@ LEGEND = (
     "NEES, cross-range rms and the camera scores use the 200 m match distance.",
     "intervals are not adjusted for the many comparisons.",
 )
+LIMITATIONS = (
+    "LIMITATIONS of the frozen parameters:",
+    "  - The four tuning selections (EKF high-Q, IMM-A, IMM-B, bias prior) were made by the",
+    "    fallback rule: no candidate met the neutral margins on the 20 tuning seeds, so the",
+    "    least violating candidate of each family was taken.",
+    "  - Ties were broken toward the smaller value: EKF Q = 1 and Q = 2 both violated by 2.04",
+    "    margins; IMM-B 7.5/2 at 2.02 against 15/2 at 2.04 is a noise-level difference.",
+    "  - The id_switches margin (+-0.2 per run) is flagged WIDER in the projected half widths of",
+    "    the tuning run and may be UNDERPOWERED even at 50 seeds.",
+    "  - EKF high-Q 3 and 5 are descriptive sensitivity controls, not tuned and not criteria.",
+)
 PILOT_BANNER = (
     "PILOT: a does-it-run check with few seeds. No conclusions may be drawn from these numbers."
 )
@@ -271,7 +282,7 @@ def _absolute(result: SweepResult, i: int, name: str, kind: str) -> str:
 
 def criteria_lines(criteria: Sequence[Criterion], header: Sequence[str]) -> list[str]:
     """The verdict and the numbers of every criterion, as text."""
-    lines = [*header, ""]
+    lines = [*header, "", *LIMITATIONS, ""]
     for criterion in criteria:
         lines.append(f"== {criterion.name}: {criterion.verdict}")
         lines += [f"   {line}" for line in criterion.lines]

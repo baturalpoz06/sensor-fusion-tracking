@@ -14,6 +14,7 @@ from fusion.improvement_criteria import (
     criterion_b2,
     criterion_b3,
     criterion_hdrag,
+    criterion_vs_controls,
     equivalence,
     judge,
     non_inferior,
@@ -178,6 +179,83 @@ def test_a1_lists_a_worse_common_support_rmse_without_failing():
     result = criterion_a1([b], "IMM-A", winnable, "maneuver")
     assert result.verdict == "PASS"
     assert any("cs window rmse worsens in 3" in line for line in result.lines)
+
+
+CONTROLS = ("EKF high-Q", "EKF high-Q 3", "EKF high-Q 5")
+
+
+def controls_block(imm_shift: float, with_controls: bool = True) -> BlockResult:
+    """Baseline loses 0.1; the controls end at 0.08, 0.05 and 0.03 (Q = 1, 3, 5); IMM-A at
+    0.1 + imm_shift. Three maneuver rows, all winnable."""
+    effects = {"IMM-A": lambda i: {"window_missed_rate": imm_shift}}
+    if with_controls:
+        for name, shift in zip(CONTROLS, (-0.02, -0.05, -0.07), strict=True):
+            effects[name] = lambda i, s=shift: {"window_missed_rate": s}
+    return maneuver_block(effects)
+
+
+WINNABLE = tuple(f"separated | 0 | turn {i}" for i in range(3))
+
+
+def test_a_claim_that_holds_against_the_strongest_control_is_a_pass():
+    """Fails if a claim that beats every control, the strongest (Q = 5) included, is not a PASS."""
+    result = criterion_vs_controls([controls_block(-0.12)], "IMM-A", WINNABLE, "maneuver")
+    assert result.verdict == "PASS", result.lines
+    assert any("strongest control" in line and "EKF high-Q 5" in line for line in result.lines)
+    assert sum(line.startswith("vs ") for line in result.lines) == 3
+
+
+def test_a_claim_that_beats_only_the_weaker_controls_is_not_a_pass():
+    """Fails if beating Q = 1 alone passes, or the weaker control is not named.
+
+    IMM-A ends at 0.04: clearly below Q = 1 (0.08), level with Q = 3 (0.05), above Q = 5 (0.03).
+    """
+    result = criterion_vs_controls([controls_block(-0.06)], "IMM-A", WINNABLE, "maneuver")
+    assert result.verdict == "HOLDS ONLY VS WEAKER CONTROL", result.lines
+    assert any("holds only against the weaker control(s): EKF high-Q" in x for x in result.lines)
+    by_control = {x.split(":")[0]: x for x in result.lines if x.startswith("vs ")}
+    assert "PASS" in by_control["vs EKF high-Q"] and "FAIL" in by_control["vs EKF high-Q 5"]
+
+
+def test_a_claim_that_beats_no_control_is_a_fail():
+    """Fails if an arm no better than the controls is reported as holding against any."""
+    result = criterion_vs_controls([controls_block(0.0)], "IMM-A", WINNABLE, "maneuver")
+    assert result.verdict == "FAIL", result.lines
+
+
+def test_the_strongest_control_is_the_one_with_the_lowest_missed_rate():
+    """Fails if the strongest control is taken by name or order instead of by its missed rate."""
+    block = maneuver_block(
+        {
+            "IMM-A": lambda i: {"window_missed_rate": -0.12},
+            "EKF high-Q": lambda i: {"window_missed_rate": -0.08},  # the strongest here
+            "EKF high-Q 3": lambda i: {"window_missed_rate": -0.02},
+            "EKF high-Q 5": lambda i: {"window_missed_rate": -0.05},
+        }
+    )
+    result = criterion_vs_controls([block], "IMM-A", WINNABLE, "maneuver")
+    assert any("strongest control" in x and x.endswith("EKF high-Q") or "): EKF high-Q" in x
+               for x in result.lines if "strongest control" in x)  # fmt: skip
+    assert not any("strongest control" in x and "high-Q 5" in x for x in result.lines)
+
+
+def test_without_the_control_arms_the_claim_is_not_applicable():
+    """Fails if a result without the controls gives a verdict."""
+    result = criterion_vs_controls(
+        [controls_block(-0.12, with_controls=False)], "IMM-A", WINNABLE, "maneuver"
+    )
+    assert result.verdict == "N/A"
+
+
+def test_the_baseline_criterion_is_unchanged_by_the_reference_argument():
+    """Fails if A1 against the baseline changes: default reference, secondary score kept."""
+    block = controls_block(-0.06)
+    result = criterion_a1([block], "IMM-A", WINNABLE, "maneuver")
+    assert result.name == "A1 IMM-A (maneuver rows)" and result.verdict == "PASS"
+    assert any("cs window rmse" in x and "n/a" not in x for x in result.lines)
+    vs = criterion_a1([block], "IMM-A", WINNABLE, "maneuver", reference="EKF high-Q 5")
+    assert vs.name == "A1 IMM-A vs EKF high-Q 5 (maneuver rows)"
+    assert any("cs window rmse n/a" in x for x in vs.lines)
 
 
 def neutral_block(shifts: dict, label="neutral", group="maneuver", seed=7) -> BlockResult:
