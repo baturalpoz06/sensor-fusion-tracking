@@ -9,15 +9,20 @@ of any sensor, and the camera update of a track is skipped when its bearing gate
 gate of another confirmed track (camera ambiguity). Two real targets with close bearings can
 therefore coast without any update; in a radar outage longer than max_coast_time both are then
 deleted although they exist. Only radar-only outages longer than max_coast_time with close
-targets are affected (in 'crossing', targets 0 and 1 pass within 10 m at about 30 s). The
-experiments keep the default max_coast_time above their radar-only outages, and the
-coast_deletions counter shows it: it must read 0 there.
+targets are affected (in 'crossing', targets 0 and 1 reach a closest approach of a median 16.4 m
+at about 30 s over 50 seeds, within 10 m in 16 of them). The experiments keep the default
+max_coast_time above their radar-only outages, and the coast_deletions counter shows it: it must
+read 0 there. Measured by scripts/diag_outage_limitations.py (50 seeds, no clutter, radar outage
+20-40 s in 'crossing'): no coast deletion at max_coast_time 2, 5, 10 and 15 s; the longest stretch
+without an update of a confirmed track was 0.8 s (mean over seeds 0.67 s), the longest run of
+camera steps skipped as ambiguous 0.7 s, so the deletion described above was not reproduced in
+that scene.
 
 A second, similar effect: camera clutter that falls into the widened bearing gate of a coasting
 track also updates it and resets its clock, so with camera clutter the track of a vanished
-target outlives max_coast_time (measured: ghost lifetime 7.0 s and 20.9 s instead of 5 s and 10
-s at 5 camera clutter points per scan; radar clutter alone does not do it). Experiment f runs
-without clutter; no planned experiment has a vanished target with clutter.
+target outlives max_coast_time (measured over 50 seeds: ghost lifetime 7.0 s and 20.8 s instead
+of 5 s and 10 s at 5 camera clutter points per scan; radar clutter alone does not do it).
+Experiment f runs without clutter; no planned experiment has a vanished target with clutter.
 """
 
 from collections.abc import Sequence

@@ -14,9 +14,11 @@ outages, so it must read 0 in those rows.
 
 A second, similar effect: camera clutter that falls into the widened bearing gate of a coasting
 track also updates it and resets its clock, so with camera clutter the track of a vanished
-target outlives max_coast_time (measured: ghost lifetime 7.0 s and 20.9 s instead of 5 s and 10
-s at 5 camera clutter points per scan; radar clutter alone does not do it). Experiment f runs
-without clutter; no planned experiment has a vanished target with clutter.
+target outlives max_coast_time (measured over 50 seeds: ghost lifetime 7.0 s and 20.8 s instead
+of 5 s and 10 s at 5 camera clutter points per scan; radar clutter alone does not do it).
+Experiment f runs without clutter; no planned experiment has a vanished target with clutter.
+The first limitation was not reproduced by scripts/diag_outage_limitations.py (see the docstring
+of fusion.outage_experiment).
 """
 
 from collections.abc import Mapping, Sequence
