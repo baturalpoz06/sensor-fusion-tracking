@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sensor-fusion-tracking"
 version = "0.1.0"
-description = "Multi-sensor fusion and state estimation (KF/EKF/UKF) for target tracking"
+description = "Multi-sensor fusion and state estimation (KF/EKF/IMM) for target tracking"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
