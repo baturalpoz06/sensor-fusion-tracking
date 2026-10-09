@@ -24,7 +24,7 @@ Contents: 0 How to read this · 1 Radar vs fusion, single target · 2 Filter con
 | ID switch | Identity changes of the track matched to a target, per run, counted after the burn-in. |
 | NEES | Normalized estimation error squared, `e^T P^-1 e`. For a consistent filter its mean equals the state dimension: 4 for the state, 2 for position, 2 for velocity. |
 | cross-range rms | Position error component perpendicular to the line of sight from the radar (section 5). |
-| match distance | A track is matched to a target if it lies within this distance. 50 m for all scores of sections 3 (except the compare run), 4, 5 and the 50 m columns of 6 and 7; 200 m for the error diagnostics (cross-range, NEES, camera accept rates, and the cross-range columns of Table C); 150 m in the multi-target compare run of section 3. Each table has one match distance, printed next to it, with one exception: Table C in section 7 has RMSE columns at 50 m and cross-range columns at 200 m (the source file names the 200 m for the cross-range columns; the 50 m of the RMSE columns is explained in section 7). |
+| match distance | A track is matched to a target if it lies within this distance. 50 m for all scores of sections 3 (the compare run is given at 150 m and at 50 m), 4, 5 and the 50 m columns of 6 and 7; 200 m for the error diagnostics (cross-range, NEES, camera accept rates, and the cross-range columns of Table C); 150 m in the multi-target compare run of section 3. Each table has one match distance, printed next to it, with one exception: Table C in section 7 has RMSE columns at 50 m and cross-range columns at 200 m (the source file names the 200 m for the cross-range columns; the 50 m of the RMSE columns is explained in section 7). |
 
 ### Statistics
 
@@ -56,7 +56,7 @@ the script docstring, and the file date (from the file system) is given.
 | Source file | Header | Date |
 |---|---|---|
 | `results/fusion_experiment.txt`, `consistency_experiment.txt`, `test_count.txt`, `mutation_checks.txt` | yes | 2026-10-08 |
-| `results/phase6/*.txt` | yes | 2026-10-08 |
+| `results/phase6/*.txt` | yes | 2026-10-08 (`compare_50m.txt`: 2026-10-09) |
 | `results/outage_limitations.txt`, `results/summary_headline.regenerated.txt` | yes | 2026-10-08 |
 | `results/outage_crossing.txt`, `results/outage_separated.txt` | no | 2026-10-04 |
 | `results/robustness_*.txt`, `results/summary_headline.txt`, `results/diag_maneuver.txt` | no | 2026-10-05 |
@@ -138,8 +138,28 @@ Source: `results/phase6/compare.txt` · Command:
 
 At this match distance the fused tracker has the lower RMSE and fewer ID switches, and the higher
 ghost rate and the higher missed rate (0.0328 against 0.0163 and 0.00221 against 0.000181; the
-intervals overlap for both). The 50 m tables below are separate runs; their numbers are not
-comparable with this table.
+intervals overlap for both).
+
+The same comparison at the 50 m match distance, the one used by the sweep tables below:
+
+Source: `results/phase6/compare_50m.txt` · Command:
+`python scripts/run_mtt_experiment.py --seeds 50 --workers 8 --sweeps compare --match-distance 50 --no-plots`
+· **Match distance: 50 m.** Radar and camera clutter 5 per scan; the same 50 seeds and simulations as
+the 150 m table, only the match distance differs.
+
+| Tracker | RMSE [m] | ghost / step | missed | delay [s] | ID switches | false / step | births / scan |
+|---|---|---|---|---|---|---|---|
+| radar-only | 18.1 +- 0.53 | 0.178 +- 0.036 | 0.0407 +- 0.0092 | 2.56 +- 0.16 | 1.34 +- 0.57 | 0.0131 +- 0.01 | 4.86 +- 0.081 |
+| fused | 3.35 +- 0.53 | 0.0579 +- 0.036 | 0.00849 +- 0.0069 | 2.37 +- 0.12 | 0.3 +- 0.25 | 0.016 +- 0.011 | 4.87 +- 0.082 |
+
+The RMSE of the fused tracker is lower than that of the radar-only tracker at both match distances
+with non-overlapping intervals (3.35 +- 0.53 m against 18.1 +- 0.53 m at 50 m, 5.69 +- 1.8 m against
+21.8 +- 1 m at 150 m), while the ghost and missed differences lie within the overlapping intervals
+at 150 m; at 50 m the intervals of these two scores do not overlap (ghost 0.0579 +- 0.036 against
+0.178 +- 0.036, missed 0.00849 +- 0.0069 against 0.0407 +- 0.0092). These are intervals of the two
+rows taken separately, not paired differences. The two tables are not comparable cell by cell (the
+match distance defines which tracks count as matched, ghost and missed), and the sweep tables below
+are separate runs.
 
 ### 3.2 Radar clutter rate sweep (fused tracker)
 
@@ -802,6 +822,7 @@ results, which are deterministic per seed):
 | 1 | `python scripts/run_fusion_experiment.py` | `results/fusion_experiment.txt` |
 | 2 | `python scripts/run_consistency_experiment.py` | `results/consistency_experiment.txt` |
 | 3.1 | `python scripts/run_mtt_experiment.py --seeds 50 --workers 8 --sweeps compare --match-distance 150 --no-plots` | `results/phase6/compare.txt` |
+| 3.1 | `... --sweeps compare --match-distance 50 --no-plots` | `compare_50m.txt` |
 | 3.2 | `... --sweeps clutter --sweep-sensors radar --camera-clutter-rate 0 --no-plots` | `radar_lambda.txt` |
 | 3.2 | `... --sweeps clutter --sweep-sensors radar --no-plots` | `radar_lambda_mixed.txt` |
 | 3.3 | `... --sweeps clutter --sweep-sensors camera --radar-clutter-rate 0 --no-plots` | `camera_lambda.txt` |
