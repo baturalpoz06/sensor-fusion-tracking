@@ -6,7 +6,7 @@ Simulated radar + camera multi-target tracking with an extended Kalman filter (E
 interacting multiple model (IMM) motion model and a camera-bias estimate; the evaluation uses 50 seeds (0-49) with per-seed paired
 comparisons where stated (one diagnostic uses 10), and every result is traced in [docs/RESULTS.md](docs/RESULTS.md).
 
-![Scatter plot with the neutral-row RMSE cost against the EKF in meters on the x axis (0 to 1.6) and the window missed-rate reduction on the y axis (0 to 0.1). Six points with 95% interval bars: the EKF reference at the origin, EKF high-Q 1 and IMM-A at the lowest costs, IMM-B near a vertical dashed line at 0.3 m, EKF high-Q 3 and EKF high-Q 5 at the largest costs and the largest reductions.](docs/figures/benefit_cost.png)
+![Scatter plot with the neutral-row RMSE cost against the EKF in meters on the x axis (0 to 1.6) and the window missed-rate reduction on the y axis (0 to 0.1). Five arms with 95% interval bars (EKF high-Q 1 and IMM-A at the lowest costs, IMM-B near a vertical dashed line at 0.3 m, EKF high-Q 3 and EKF high-Q 5 at the largest costs and the largest reductions) plus the EKF reference point at the origin without bars.](docs/figures/benefit_cost.png)
 
 Up = fewer missed targets during maneuvers, measured as window missed (the share of in-view (target, time step) pairs, from the start of a maneuver to the end of the
 run, without a matched confirmed track within 50 m); right = more position error when the targets fly straight; dashed line = the
@@ -79,8 +79,9 @@ at 10 s ([§4.3](docs/RESULTS.md#43-measured-limitations); vanishing scene, awar
 ![Line chart of the missed rate, the share of in-view target steps, against time in 5 s bins for the EKF, the frozen high-Q 1 EKF and IMM-B after a 5 deg/s turn. The EKF rate rises after the turn and falls again; the other two stay near zero.](docs/figures/drag_tail.png)
 
 Separated scene, 5 deg/s turn, clutter 0, 50 seeds, 50 m; bands are 95% t intervals. Missed rate summed over 25-45 s: EKF 0.7756; the
-frozen high-Q 1 (1 m/s^2) EKF changes it by -0.7367 [-0.832, -0.6413], a reduction of 0.95; the pre-registered drag hypothesis was
-supported (H-drag, [§6.5](docs/RESULTS.md#65-drag-hypothesis)). A 10-seed diagnostic (`scripts/diag_maneuver.py --seeds 10`) for the same
+frozen high-Q 1 (1 m/s^2) EKF changes it by -0.7367 [-0.832, -0.6413], a reduction of 0.95; the drag criterion, written before the evaluation, was
+supported (H-drag, [§6.5](docs/RESULTS.md#65-drag-hypothesis)); it came from seeds 0-9 ([§0](docs/RESULTS.md#0-how-to-read-this)), and
+the seeds 10+ row is also supported (baseline 0.7195, EKF high-Q change -0.682 [-0.7778, -0.5862], reduction 0.948). A 10-seed diagnostic (`scripts/diag_maneuver.py --seeds 10`) for the same
 5 deg/s turn finds that the targets missed at 50 m are matched at a 200 m match distance in every 5 s bin after the first (the 0-5 s bin reads 0.5000 at both distances in every row, including the neutral one)
 ([§5.2](docs/RESULTS.md#52-maneuvers-scene-separated-and-crossing)).
 
@@ -126,12 +127,12 @@ ruff check .
 pytest
 python scripts/run_fusion_experiment.py
 python scripts/run_mtt_experiment.py --seeds 50 --workers 8 --sweeps compare --match-distance 50 --no-plots
-python scripts/run_improvement_experiment.py --stage eval --workers 8
+python scripts/run_improvement_experiment.py --stage eval --workers 14
 python scripts/make_readme_figures.py
 ```
 
 The `--stage eval` command refuses to run until the tuned values are frozen at a commit that is an ancestor of HEAD with no uncommitted
-tracked changes; it is about 28,400 tracker runs, roughly 90 minutes with 14 workers. The figure script reads that saved evaluation.
+tracked changes; it is about 28,400 tracker runs, roughly 90 minutes with 14 workers (the script docstring's estimate). The figure script reads that saved evaluation.
 Results go to the git-ignored `results/`. Every other command is listed in [§9](docs/RESULTS.md#9-reproduction).
 
 The process count does not change results; tests `test_sweep_gives_identical_results_with_one_and_with_several_workers`
