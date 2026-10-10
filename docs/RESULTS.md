@@ -33,13 +33,15 @@ Contents: 0 How to read this · 1 Radar vs fusion, single target · 2 Filter con
 - Cells are `mean +- half-width` of the 95% Student t interval over seeds. "d" is a paired
   difference, row (or arm) minus the neutral row (or the baseline arm), computed per seed, then
   summarized the same way.
-- Seed sets: tuning seeds 1000-1019 (choose parameters), evaluation seeds 0-49 (used after the
-  parameters were frozen), test seeds from 2000, pilots with 5 seeds (a does-it-run check; no
+- Seed sets: tuning seeds 1000-1019 (choose parameters), evaluation seeds 0-49 (the improvement
+  arms were run on them only after the parameters were frozen; the baseline tracker had used the same
+  seeds in the experiments of sections 3 to 5, and seeds 0-9 produced the drag hypothesis of section 6.5), test seeds from 2000, pilots with 5 seeds (a does-it-run check; no
   conclusion is drawn from them).
 - Pre-registration (section 6): the success criteria are code in `src/fusion/improvement_criteria.py`
-  and the tuned parameters were frozen in commit b6a319f at 3354afc, before an evaluation seed was
-  used. The high-Q control arms 3 and 5 and the reporting rule against them were added later, in
-  16185d2; they are descriptive and not tuned.
+  and the tuned parameters were frozen in commit b6a319f at 3354afc, before the improvement arms were
+  run on an evaluation seed. The high-Q control arms 3 and 5 and the reporting rule against them were added after tuning,
+  in commit 16185d2; the evaluation (seeds 0-49) ran on that commit (first line of
+  `results/criteria_8b.txt`). They are descriptive and not tuned.
 - Criterion vocabulary (docstring of `improvement_criteria.py`): "improves" means the 95% interval
   of the paired difference excludes zero in that direction and the mean difference is at least the
   practical threshold (missed rate: max(0.01, 25% of the baseline's window degradation); RMSE and
@@ -508,8 +510,8 @@ degrades RMSE, ghost rate and ID switches; assuming it four times too large (x4)
 ## 6. Improvements
 
 Variants ("arms") of the tracker are compared with the baseline EKF on the same simulated data.
-Parameters were chosen on tuning seeds 1000-1019 by fixed rules and frozen before the evaluation
-seeds 0-49 were used (section 0). Source of this section: `results/criteria_8b.txt` (commit
+Parameters were chosen on tuning seeds 1000-1019 by fixed rules and frozen before the arms were run
+on the evaluation seeds 0-49 (section 0). Source of this section: `results/criteria_8b.txt` (commit
 16185d2, seeds 0-49) unless stated · Command: `python scripts/run_improvement_experiment.py --stage
 eval --workers 8` (README) · Match distance: the 50 m scores for RMSE, missed, ghost and ID
 switches; NEES, cross-range and camera scores at 200 m (header of `summary_8b_headline.txt`).

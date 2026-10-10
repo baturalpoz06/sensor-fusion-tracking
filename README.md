@@ -65,7 +65,7 @@ as the hero figure. The 0.3 m neutral margin belongs to criterion A2.
 | IMM-B (constant velocity plus coordinated turns at plus and minus 7.5 deg/s) | Window missed 0.0248 +- 0.0023 | Neutral RMSE cost, 4-block mean, 50 m: 0.315 +- 0.12 m (its interval includes the 0.3 m margin) | Passed both maneuver checks (A1: 23 of 30 and 10 of 12 row-blocks); failed the no-harm check ([A2](docs/RESULTS.md#63-neutral-non-inferiority-a2-the-cost-side)), e.g. RMSE +0.5017 [+0.4247, +0.5788] on crossing, clutter 0, margin 0.3 (50 m; [§6.3](docs/RESULTS.md#63-neutral-non-inferiority-a2-the-cost-side); the A1 counts are in [§6.2](docs/RESULTS.md#62-verdicts-heading-lines-verbatim-from-criteria_8btxt)) |
 | Higher process noise 3 m/s^2 (descriptive control, not tuned) | Window missed 0.0135 +- 0.0015 | Neutral RMSE cost, 4-block mean, 50 m: 0.804 +- 0.097 m | Descriptive ([Table A](docs/RESULTS.md#table-a-benefit-on-the-maneuver-rows), [Table D](docs/RESULTS.md#table-d-values-plotted-in-the-hero-figure-4-block-means), [§6.4](docs/RESULTS.md#64-comparison-with-the-ekf-high-q-controls-ctrl)) |
 | Higher process noise 5 m/s^2 (descriptive control, not tuned) | Window missed 0.00443 +- 0.00082 | Neutral RMSE cost, 4-block mean, 50 m: 1.24 +- 0.14 m | Descriptive ([Table A](docs/RESULTS.md#table-a-benefit-on-the-maneuver-rows), [Table D](docs/RESULTS.md#table-d-values-plotted-in-the-hero-figure-4-block-means), [§6.4](docs/RESULTS.md#64-comparison-with-the-ekf-high-q-controls-ctrl)) |
-| Camera-bias estimate | At 1 deg bias: EKF+bias 15.5 +- 1.3 m against EKF 27 +- 0.05 m run RMSE (crossing, clutter 0, 50 m, [Table C](docs/RESULTS.md#table-c-camera-bias-estimate)) | At 0.5 deg the RMSE change (EKF+bias minus EKF) is -1.27 +- 0.36 m (crossing, clutter 0, 50 m), an improvement smaller than the pre-registered threshold | Failed B1 ([§6.6](docs/RESULTS.md#66-camera-bias-estimate)) |
+| Camera-bias estimate | At 1 deg bias: EKF+bias 15.5 +- 1.3 m against EKF 27 +- 0.05 m run RMSE (crossing, clutter 0, 50 m, [Table C](docs/RESULTS.md#table-c-camera-bias-estimate)) | Runtime x1.27 of the EKF per trial, maneuver block ([§6.7](docs/RESULTS.md#67-runtime)) | At 0.5 deg the improvement (EKF+bias minus EKF -1.27 +- 0.36 m; crossing, clutter 0, 50 m) is smaller than the pre-registered threshold: failed B1 ([§6.6](docs/RESULTS.md#66-camera-bias-estimate)) |
 
 Rows come from different experiments and are not additive. Neither IMM beat the strongest control, EKF with process noise 5 m/s^2, on
 the maneuver rows (CTRL, [§6.4](docs/RESULTS.md#64-comparison-with-the-ekf-high-q-controls-ctrl)). With 5 camera clutter points per
@@ -107,7 +107,8 @@ failed the no-harm check (A2, [§6.3](docs/RESULTS.md#63-neutral-non-inferiority
 ## How we measured
 
 - Success criteria were written as code before the evaluation (`src/fusion/improvement_criteria.py`); the tuned parameters were frozen
-  in commit b6a319f before the evaluation seeds were used.
+  in commit b6a319f before the improvement arms were run on the evaluation seeds ([§0](docs/RESULTS.md#0-how-to-read-this): the
+  baseline tracker had used the same seeds earlier).
 - Tuning seeds 1000-1019; evaluation seeds 0-49 (50); per-seed paired differences with 95% t intervals.
 - All four tuning selections used the fallback rule (no candidate met the neutral margins); the ID-switch margin may be underpowered;
   intervals are not adjusted for multiple comparisons ([§6.1](docs/RESULTS.md#61-limitations-of-the-frozen-parameters-verbatim)).
