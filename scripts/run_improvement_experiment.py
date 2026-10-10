@@ -1,10 +1,10 @@
 """Phase 8b: the IMM motion model and the camera-bias estimate against the Phase 8a tracker.
 
 Usage:
-    python scripts/run_improvement_experiment.py --stage tune --workers 12
+    python scripts/run_improvement_experiment.py --stage tune --workers 14
     python scripts/run_improvement_experiment.py --stage timing
-    python scripts/run_improvement_experiment.py --stage eval --pilot --workers 12
-    python scripts/run_improvement_experiment.py --stage eval --workers 12
+    python scripts/run_improvement_experiment.py --stage eval --pilot --workers 14
+    python scripts/run_improvement_experiment.py --stage eval --workers 14
 
 Stages:
     tune    every candidate parameter of the arms on the tuning seeds (1000-1019), the tuned
