@@ -2,11 +2,13 @@
 
 Usage:
     python scripts/make_readme_figures.py [--pickle results/improvement_results.pkl]
-        [--out docs/figures]
+        [--out docs/figures] [--values results/readme_figures.txt]
 
 Reads the evaluation results (seeds 0-49, written by run_improvement_experiment.py --stage eval)
 and writes three PNGs. Every number is computed from the per-seed arrays of the pickle; the
-script prints the plotted means next to the tables of results/before_after_8c.txt they must equal.
+script prints the plotted means next to the tables of results/before_after_8c.txt they must equal
+and writes the plotted values of the hero figure, with 95% intervals, to --values
+(default results/readme_figures.txt) behind a provenance header.
 
     benefit_cost.png  x: neutral-row RMSE cost against the plain EKF [m], mean over the maneuver
                       blocks; y: reduction of the window missed rate on the winnable maneuver
@@ -38,6 +40,7 @@ from fusion.improvement_experiment import (
     RowResult,
 )
 from fusion.mtt_metrics import SeedInterval, seed_confidence_interval
+from fusion.provenance import provenance_lines
 
 ROOT = Path(__file__).resolve().parents[1]
 HERO_ARMS = ("EKF high-Q", "EKF high-Q 3", "EKF high-Q 5", "IMM-A", "IMM-B")
@@ -53,6 +56,7 @@ DRAG_BINS = 11  # bins [5, 10) .. [55, 60); the last bin of the pickle is a sing
 TURN_END = 25.0  # [s]; the 5 deg/s turn runs from ONSET to here (robustness_experiment defaults)
 CONFIDENCE = 0.95
 FILES = ("benefit_cost.png", "camera_bias.png", "drag_tail.png")
+VALUES_FILE = "readme_figures.txt"
 
 # One color per arm in all figures: the first six slots of the reference categorical palette in
 # their fixed order, and a neutral for the baseline.
@@ -394,12 +398,63 @@ def check_lines(results: dict[str, list[BlockResult]], winnable: Sequence[str]) 
     return lines
 
 
+def cell(value: SeedInterval) -> str:
+    """"mean +- half-width" of an interval, as in the tables of docs/RESULTS.md."""
+    half = (value.upper - value.lower) / 2.0
+    return f"{value.mean:.3g} +- {half:.2g}"
+
+
+def values_lines(
+    results: dict[str, list[BlockResult]], winnable: Sequence[str], high_q: float
+) -> list[str]:
+    """The values plotted in the hero figure, one row per arm, as text.
+
+    x is the neutral-row RMSE cost against the plain EKF (mean over the maneuver blocks) and y the
+    reduction of the window missed rate (mean over the winnable maneuver row-blocks); both are
+    per-seed paired against the EKF, with the 95% t interval over seeds.
+    """
+    blocks = group(results, "maneuver")
+    rows = sum(
+        block_label(block, row) in winnable
+        for block in blocks
+        for row in block.rows
+        if row.group == "maneuver" and row.label != neutral_label(row)
+    )
+    lines = [
+        f"HERO FIGURE VALUES (docs/figures/{FILES[0]}): {seeds_text(results)}, "
+        "match distance 50 m.",
+        "x = neutral-row run RMSE minus the plain EKF [m], mean of "
+        f"{len(blocks)} maneuver blocks;",
+        f"y = window missed rate of the EKF minus the arm, mean of {rows} winnable maneuver",
+        "row-blocks (positive = fewer missed). Cells: mean +- half width of the 95% t",
+        "interval over seeds, per-seed paired against the EKF.",
+        "",
+        f"{'arm':<16}{'x: RMSE cost [m]':>22}{'y: missed reduction':>24}",
+        "-" * 62,
+        f"{'EKF (reference)':<16}{'0 +- 0':>22}{'0 +- 0':>24}",
+    ]
+    for arm, (cost, gain) in hero_points(results, winnable).items():
+        lines.append(f"{display_name(arm, high_q):<16}{cell(cost):>22}{cell(gain):>24}")
+    return lines
+
+
+def write_values(
+    path: Path, results: dict[str, list[BlockResult]], winnable: Sequence[str], high_q: float
+) -> Path:
+    """Write values_lines behind a provenance header (command, git HEAD, UTC date)."""
+    lines = [*provenance_lines(sys.argv), *values_lines(results, winnable, high_q)]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def main() -> None:
     import pickle
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pickle", type=Path, default=ROOT / "results" / "improvement_results.pkl")
     parser.add_argument("--out", type=Path, default=ROOT / "docs" / "figures")
+    parser.add_argument("--values", type=Path, default=ROOT / "results" / VALUES_FILE)
     args = parser.parse_args()
     if FROZEN is None:
         sys.exit("improvement_experiment.FROZEN is not set: there are no frozen parameters")
@@ -407,8 +462,10 @@ def main() -> None:
         results = pickle.load(handle)
     for line in check_lines(results, FROZEN.winnable):
         print(line)
-    for path in make_figures(results, FROZEN.winnable, args.out, FROZEN.ekf_high_accel_std):
+    high_q = FROZEN.ekf_high_accel_std
+    for path in make_figures(results, FROZEN.winnable, args.out, high_q):
         print(f"wrote {path} ({path.stat().st_size} bytes)")
+    print(f"wrote {write_values(args.values, results, FROZEN.winnable, high_q)}")
 
 
 if __name__ == "__main__":

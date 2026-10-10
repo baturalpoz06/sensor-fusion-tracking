@@ -172,3 +172,30 @@ def test_the_check_lines_list_every_hero_arm_and_every_bias_layout(results):
         assert arm in text
     for layout in figures.BIAS_LAYOUTS:
         assert f"{layout}, EKF " in text and f"{layout}, EKF+bias" in text
+
+
+def test_values_lines_list_the_reference_and_every_hero_arm_with_hand_computed_cells(results):
+    """Fails if a plotted value is missing from the text, shows another statistic than the
+    plotted one, or the block and row counts of the header are wrong."""
+    lines = figures.values_lines(results, WINNABLE, HIGH_Q)
+    text = "\n".join(lines)
+    assert "mean of 2 maneuver blocks" in text and "mean of 2 winnable maneuver" in text
+    by_name = {line[:16].strip(): line[16:].split("  ") for line in lines[8:]}
+    cells = {name: [c.strip() for c in parts if c.strip()] for name, parts in by_name.items()}
+    assert cells["EKF (reference)"] == ["0 +- 0", "0 +- 0"]
+    assert cells["EKF high-Q 1"] == ["0.375 +- 0", "0.0625 +- 0"]
+    assert cells["EKF high-Q 3"] == ["1.5 +- 0", "0.25 +- 0"]
+    assert cells["IMM-A"] == ["0.188 +- 0", "0.125 +- 0"]
+    assert cells["IMM-B"] == ["0.75 +- 0", "0.5 +- 0"]
+
+
+def test_write_values_puts_the_provenance_header_first(results, tmp_path):
+    """Fails if the values file lacks the command, git HEAD or date lines, or if they do not come
+    before the table."""
+    path = figures.write_values(tmp_path / "out" / "values.txt", results, WINNABLE, HIGH_Q)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("# command: python ")
+    assert lines[1].startswith("# git HEAD: ")
+    assert lines[2].startswith("# date (UTC): ")
+    assert lines[3] == ""
+    assert lines[4].startswith("HERO FIGURE VALUES")
