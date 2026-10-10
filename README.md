@@ -13,6 +13,10 @@ run, without a matched confirmed track within 50 m); right = more position error
 no-harm margin (0.3 m). Points are means over 50 seeds with 95% Student t intervals, paired per seed against the EKF; the x value is
 the mean over the four maneuver blocks ([Table D](docs/RESULTS.md#table-d-values-plotted-in-the-hero-figure-4-block-means)).
 
+Notation: unless stated otherwise, `a +- b` is the mean and the half-width of a 95% Student t interval over the 50 seeds (for a
+difference between two variants, over the per-seed paired differences), and `[lo, hi]` gives interval bounds. The one exception is the
+single-target fusion bullet below, which reports a sample standard deviation.
+
 ## Why radar and camera
 
 | Sensor | Range | Bearing | Rate |
@@ -23,7 +27,8 @@ the mean over the four maneuver blocks ([Table D](docs/RESULTS.md#table-d-values
 The noise values are in Methods below.
 
 - Far pass, one target (`scripts/run_fusion_experiment.py`, 50 seeds, burn-in 5 s, range 1952 .. 2138 m): radar-only EKF 26.31 +- 7.21
-  m against fusion EKF 2.56 +- 0.60 m RMSE on radar steps; the fusion RMSE is lower in 50/50 seeds
+  m against fusion EKF 2.56 +- 0.60 m RMSE on radar steps (mean +- sample standard deviation over the 50 seeds, not a confidence
+  interval); the fusion RMSE is lower in 50/50 seeds
   ([§1](docs/RESULTS.md#1-radar-vs-fusion-single-target)).
 - Consistency, near pass, state, all steps (`scripts/run_consistency_experiment.py`, 50 seeds): fusion EKF NEES 3.87, 95% interval
   [3.62, 4.12], expected value 4; the interval is a t interval over the 50 seeds ([§2](docs/RESULTS.md#2-filter-consistency)). Not
@@ -52,7 +57,11 @@ missed 0.00221 +- 0.0018 against 0.000181 +- 0.00036), and the fused means are t
 ### What each addition buys and costs
 
 Benefit and cost are one number each, from different experiments, so rows are not additive. Window missed (defined above) is the mean
-over the 30 maneuver row-blocks, 50 seeds, 50 m; the plain EKF is the reference at 0.0812 +- 0.0039 ([Table
+over 30 of the 36 non-neutral maneuver row-blocks (4 layout and clutter blocks, 9 maneuvers each): the "winnable" ones, in which the
+plain EKF's window missed rate rises by more than 0.01 (absolute) over the neutral row on the 20 tuning seeds, 1000-1019 (a threshold
+fixed in the criteria code; selection rule and source in [§6](docs/RESULTS.md#6-improvements)). The window-missed benefits below and the y values of the hero figure are therefore measured on this selected subset, not on all
+maneuver conditions; the six excluded blocks are the 1 m/s^2 acceleration on three blocks, random turns up to 5 deg/s on two, and the
+5 deg/s turn on crossing, clutter 0. Seeds 0-49, 50 m; the plain EKF is the reference at 0.0812 +- 0.0039 ([Table
 A](docs/RESULTS.md#table-a-benefit-on-the-maneuver-rows)). "Neutral RMSE cost" is the 4-block mean of the extra run RMSE against the
 EKF when nothing maneuvers, 50 m ([Table D](docs/RESULTS.md#table-d-values-plotted-in-the-hero-figure-4-block-means)), the same numbers
 as the hero figure. The 0.3 m neutral margin belongs to criterion A2.
@@ -74,7 +83,7 @@ at 10 s ([§4.3](docs/RESULTS.md#43-measured-limitations); vanishing scene, awar
 
 ## Three findings
 
-### F1. Missed targets during maneuvers are mostly tracks pulled off their target, not lost ones (10-seed diagnostic)
+### F1. In the separated layout without clutter, missed targets after a 5 deg/s turn are mostly tracks pulled off their target, not lost ones (10-seed diagnostic)
 
 ![Line chart of the missed rate, the share of in-view target steps, against time in 5 s bins for the EKF, the frozen high-Q 1 EKF and IMM-B after a 5 deg/s turn. The EKF rate rises after the turn and falls again; the other two stay near zero.](docs/figures/drag_tail.png)
 
@@ -83,7 +92,7 @@ frozen high-Q 1 (1 m/s^2) EKF changes it by -0.7367 [-0.832, -0.6413], a reducti
 supported (H-drag, [§6.5](docs/RESULTS.md#65-drag-hypothesis)); it came from seeds 0-9 ([§0](docs/RESULTS.md#0-how-to-read-this)), and
 the seeds 10+ row is also supported (baseline 0.7195, EKF high-Q change -0.682 [-0.7778, -0.5862], reduction 0.948). A 10-seed diagnostic (`scripts/diag_maneuver.py --seeds 10`) for the same
 5 deg/s turn finds that the targets missed at 50 m are matched at a 200 m match distance in every 5 s bin after the first (the 0-5 s bin reads 0.5000 at both distances in every row, including the neutral one)
-([§5.2](docs/RESULTS.md#52-maneuvers-scene-separated-and-crossing)).
+([§5.2](docs/RESULTS.md#52-maneuvers-scene-separated-and-crossing)). The 200 m diagnostic was run only for the separated layout without clutter, not for the crossing layout or for clutter.
 
 ### F2. A camera bias is a silent error; the estimate removes part of it
 
@@ -133,7 +142,7 @@ python scripts/make_readme_figures.py
 
 The `--stage eval` command refuses to run until the tuned values are frozen at a commit that is an ancestor of HEAD with no uncommitted
 tracked changes; it is about 28,400 tracker runs, roughly 90 minutes with 14 workers (the script docstring's estimate). The figure script reads that saved evaluation.
-Results go to the git-ignored `results/`. Every other command is listed in [§9](docs/RESULTS.md#9-reproduction).
+Results go to the git-ignored `results/`: the raw result files cited in docs/RESULTS.md are not included in the repository, and checking a number requires running the documented command. Every other command is listed in [§9](docs/RESULTS.md#9-reproduction).
 
 The process count does not change results; tests `test_sweep_gives_identical_results_with_one_and_with_several_workers`
 (`tests/test_mtt_experiment.py`), `test_sweep_rows_follow_the_points_and_workers_do_not_change_the_result`

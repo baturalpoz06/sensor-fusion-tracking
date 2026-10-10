@@ -86,7 +86,9 @@ class Parameters:
         winnable: Labels ("layout | clutter | row") of the maneuver row-blocks in which the
             baseline degrades by more than the practical threshold on the tuning seeds (the
             denominator of the primary criterion).
-        commit: Commit hash at which the parameters were frozen.
+        commit: Hash of the repository HEAD at which the tuning ran (recorded by the tune stage);
+            the evaluation requires it to be an ancestor of HEAD. The commit that stored these
+            values in FROZEN is a later one.
     """
 
     ekf_high_accel_std: float

@@ -32,7 +32,9 @@ Contents: 0 How to read this · 1 Radar vs fusion, single target · 2 Filter con
   noise, detections and clutter are identical across rows.
 - Cells are `mean +- half-width` of the 95% Student t interval over seeds. "d" is a paired
   difference, row (or arm) minus the neutral row (or the baseline arm), computed per seed, then
-  summarized the same way.
+  summarized the same way. One exception: the single-target table of section 1 (fusion experiment)
+  shows `mean ± sample standard deviation` over the 50 seeds (the script prints
+  `std(ddof=1)`), which is not a confidence interval and is labelled "SD" there.
 - Seed sets: tuning seeds 1000-1019 (choose parameters), evaluation seeds 0-49 (the improvement
   arms were run on them only after the parameters were frozen; the baseline tracker had used the same
   seeds in the experiments of sections 3 to 5, and seeds 0-9 produced the drag hypothesis of section 6.5), test seeds from 2000, pilots with 5 seeds (a does-it-run check; no
@@ -77,7 +79,10 @@ match distance.
 
 Source: `results/fusion_experiment.txt` · Command: `python scripts/run_fusion_experiment.py`
 
-| Scenario | Method | RMSE all steps [m] | RMSE radar steps [m] |
+**Every `±` value in this table is the sample standard deviation over the 50 seeds (mean ± SD,
+`values.std(ddof=1)` in the script), not the half-width of a 95% confidence interval.**
+
+| Scenario | Method | RMSE all steps [m] (mean ± SD) | RMSE radar steps [m] (mean ± SD) |
 |---|---|---|---|
 | near | raw radar | n/a | 14.24 ± 1.57 |
 | near | radar-only EKF | 6.64 ± 1.31 | 6.26 ± 1.25 |
@@ -542,6 +547,26 @@ high-Q" (process noise 1.0 m/s^2); "EKF high-Q 3" and "EKF high-Q 5" (process no
 descriptive controls); IMM-A (constant velocity plus a constant-velocity mode with process noise
 2.0); IMM-B (constant velocity plus coordinated turns at plus and minus 7.5 deg/s, process noise
 2.0); EKF+bias (camera-bias estimate with prior 0.01).
+
+**The winnable row-blocks (30 of 36 maneuver row-blocks, plus the 12 held-out ones).** The primary
+criterion A1 is judged only on "winnable" row-blocks. A row-block is one (layout, clutter, maneuver)
+combination: 4 blocks (crossing and separated, clutter 0 and 5) times 9 non-neutral maneuvers give
+36 in the maneuver group, and the held-out group adds 12 (3 per block). A row-block is winnable when
+the plain EKF's window missed rate on the tuning seeds (1000-1019, 20 seeds, not the evaluation
+seeds) exceeds that of the block's neutral row by more than the practical threshold
+max(0.01, 25% of that degradation); because 25% of a positive degradation is smaller than the
+degradation itself, this reduces to "more than 0.01" (absolute) for every row. All 12 held-out and
+30 of the 36 maneuver row-blocks pass (42 in `FROZEN.winnable`). The six that do not are the
+1 m/s^2 acceleration on crossing/clutter 0, separated/clutter 0 and separated/clutter 5, the random
+turns up to 5 deg/s on crossing/clutter 0 and crossing/clutter 5, and the 5 deg/s turn on
+crossing/clutter 0.
+Source and procedure: the tune stage calls `winnable_blocks` (`src/fusion/improvement_criteria.py`)
+on its own results. `python scripts/run_improvement_experiment.py --stage tune --workers 14` writes
+`results/improvement_tune.txt` (the heading "== winnable maneuver row-blocks (42)" and the 42 labels)
+and `results/improvement_tune.pkl` (the per-seed tuning scores), and prints the `FROZEN = ...`
+expression whose `winnable` field is stored in `src/fusion/improvement_experiment.py`. Recomputing
+the rule from `improvement_tune.pkl` when this section was written gave the same 42 labels in the
+same order.
 
 ### 6.1 Limitations of the frozen parameters (verbatim)
 
