@@ -249,11 +249,11 @@ coordinates.
 Radar (`src/fusion/sensors/radar.py`) and camera (`src/fusion/sensors/camera.py`):
 
 ```math
-z_r=\begin{pmatrix}\sqrt{p_x^2+p_y^2}\\ \operatorname{atan2}(p_y,p_x)\end{pmatrix}+v_r,\quad v_r\sim\mathcal N\big(0,\operatorname{diag}(\sigma_r^2,\sigma_\beta^2)\big)
+z_r=\begin{pmatrix}\sqrt{p_x^2+p_y^2}\\ \mathrm{atan2}(p_y,p_x)\end{pmatrix}+v_r,\quad v_r\sim\mathcal N\big(0,\mathrm{diag}(\sigma_r^2,\sigma_\beta^2)\big)
 ```
 
 ```math
-z_c=\operatorname{atan2}(p_y-c_y,\;p_x-c_x)+b+v_c,\quad v_c\sim\mathcal N(0,\sigma_c^2)
+z_c=\mathrm{atan2}(p_y-c_y,\;p_x-c_x)+b+v_c,\quad v_c\sim\mathcal N(0,\sigma_c^2)
 ```
 
 - Radar model h and R: `radar.py:75-79`; simulated measurement: `radar.py:32-41`.
@@ -265,9 +265,11 @@ z_c=\operatorname{atan2}(p_y-c_y,\;p_x-c_x)+b+v_c,\quad v_c\sim\mathcal N(0,\sig
 Initialisation from the first radar measurement (r, β) (`radar.py:100-135`):
 
 ```math
-\hat x_0=(r\cos\beta,\;r\sin\beta,\;0,\;0),\qquad
-J=\begin{pmatrix}\cos\beta&-r\sin\beta\\ \sin\beta&r\cos\beta\end{pmatrix},\qquad
-P_0=\begin{pmatrix}J\,\operatorname{diag}(\sigma_r^2,\sigma_\beta^2)\,J^{\top}&0\\0&\sigma_v^2 I_2\end{pmatrix}
+\begin{aligned}
+&\hat x_0=(r\cos\beta,\;r\sin\beta,\;0,\;0),\\
+&J=\begin{pmatrix}\cos\beta&-r\sin\beta\\ \sin\beta&r\cos\beta\end{pmatrix},\\
+&P_0=\begin{pmatrix}J\,\mathrm{diag}(\sigma_r^2,\sigma_\beta^2)\,J^{\top}&0\\0&\sigma_v^2 I_2\end{pmatrix}
+\end{aligned}
 ```
 
 The detection model of the multi-target simulation, by default: each target inside the field of view
@@ -396,11 +398,22 @@ the update would see an innovation of about 6.25 rad and pull the track far acro
 For a measurement z with model h, Jacobian H = ∂h/∂x evaluated at the predicted state x̂⁻:
 
 ```math
-\nu=z-h(\hat x^-)\ \text{with each bearing component replaced by}\ \operatorname{wrap}(\nu_i)=\operatorname{atan2}(\sin\nu_i,\cos\nu_i)\in[-\pi,\pi]
+\nu=z-h(\hat x^-)
+```
+
+Replace each bearing component by
+
+```math
+\mathrm{wrap}(\nu_i)=\mathrm{atan2}(\sin\nu_i,\cos\nu_i)\in[-\pi,\pi]
 ```
 
 ```math
-S=HP^-H^{\top}+R,\qquad K=P^-H^{\top}S^{-1},\qquad \hat x^+=\hat x^-+K\nu,\qquad P^+=(I-KH)P^-(I-KH)^{\top}+KRK^{\top}
+\begin{aligned}
+&S=HP^-H^{\top}+R,\\
+&K=P^-H^{\top}S^{-1},\\
+&\hat x^+=\hat x^-+K\nu,\\
+&P^+=(I-KH)P^-(I-KH)^{\top}+KRK^{\top}
+\end{aligned}
 ```
 
 Jacobians, with r = √(x² + y²) for the radar, and Δx, Δy, ρ² = Δx² + Δy² relative to the camera:
@@ -489,7 +502,10 @@ With S = L Lᵀ (Cholesky) and ν the innovation (its bearing component wrapped,
 not):
 
 ```math
-d^2=\nu^{\top}S^{-1}\nu=\lVert L^{-1}\nu\rVert^2,\qquad \text{in gate}\iff d^2\le\gamma_m=F^{-1}_{\chi^2_m}(0.99)
+\begin{aligned}
+&d^2=\nu^{\top}S^{-1}\nu=\lVert L^{-1}\nu\rVert^2,\\
+&\text{in gate}\iff d^2\le\gamma_m=F^{-1}_{\chi^2_m}(0.99)
+\end{aligned}
 ```
 
 ```math
@@ -563,7 +579,11 @@ Assignment problem for one sensor and one group of tracks, with the cost matrix 
 section 6: among all one-to-one choices of in-gate pairs,
 
 ```math
-\text{maximise}\ \sum_{i,j}X_{ij},\ \text{then, among those, minimise}\ \sum_{i,j}c_{ij}X_{ij}\quad\text{s.t.}\quad X_{ij}\in\{0,1\},\ \sum_jX_{ij}\le1,\ \sum_iX_{ij}\le1,\ X_{ij}=0\ \text{outside the gate}
+\begin{aligned}
+&\text{maximise}\ \sum_{i,j}X_{ij},\ \text{then, among those, minimise}\ \sum_{i,j}c_{ij}X_{ij}\\
+&\text{s.t.}\\
+&X_{ij}\in\{0,1\},\ \sum_jX_{ij}\le1,\ \sum_iX_{ij}\le1,\ X_{ij}=0\ \text{outside the gate}
+\end{aligned}
 ```
 
 (Minimising the total cost alone would choose the empty assignment once the costs are shifted to be
@@ -584,7 +604,7 @@ is at least max(min_range, 10⁻⁶) m from the assumed camera position (`:512-5
 ```
 
 ```math
-i\ \text{is ambiguous}\iff\exists\,j\neq i:\ \lvert\operatorname{wrap}(\theta_i-\theta_j)\rvert<w_i+w_j
+i\ \text{is ambiguous}\iff\exists\,j\neq i:\ \lvert\mathrm{wrap}(\theta_i-\theta_j)\rvert<w_i+w_j
 ```
 
 Here s_i is the std of the track's predicted bearing innovation, including the camera noise
@@ -651,8 +671,10 @@ Lifecycle after each radar scan, with hits h, scans n and consecutive misses m
 (`src/fusion/tracker/track.py:72-103`):
 
 ```math
-\text{tentative:}\ \begin{cases}\text{confirmed}&h\ge M\\ \text{deleted}&n-h>N-M\\ \text{tentative}&\text{otherwise}\end{cases}\qquad
-\text{confirmed:}\ \text{deleted}\iff m>K
+\begin{aligned}
+&\text{tentative:}\ \begin{cases}\text{confirmed}&h\ge M\\ \text{deleted}&n-h>N-M\\ \text{tentative}&\text{otherwise}\end{cases}\\
+&\text{confirmed:}\ \text{deleted}\iff m>K
+\end{aligned}
 ```
 
 A hit is a radar association only (`multi_target.py:476-478`); a newborn track has h = n = 1
@@ -776,7 +798,7 @@ s_d^2=s_a^2+s_b^2-2\,s_{ab}
 Second, the estimated variance of the sample mean of the differences, and the interval built on it:
 
 ```math
-\widehat{\operatorname{Var}}(\bar d)=\frac{s_d^2}{n},\qquad \bar d\pm t_{0.975,\,n-1}\,\frac{s_d}{\sqrt n}
+\widehat{\mathrm{Var}}(\bar d)=\frac{s_d^2}{n},\qquad \bar d\pm t_{0.975,\,n-1}\,\frac{s_d}{\sqrt n}
 ```
 
 **Identity.** The first line is exact for sample quantities. Together with the second it shows what
@@ -988,7 +1010,12 @@ matrix: the random acceleration is added after the rotation (`imm.py:70-80`).
 Mode transition (`imm.py:83-116`). With M modes, per-scan stay probability a and n steps per scan:
 
 ```math
-\lambda=\frac{Ma-1}{M-1},\qquad \lambda_s=\lambda^{1/n},\qquad \Pi_{ii}=\frac{1+(M-1)\lambda_s}{M},\qquad \Pi_{ij}=\frac{1-\Pi_{ii}}{M-1}\ (i\ne j)
+\begin{aligned}
+&\lambda=\frac{Ma-1}{M-1},\\
+&\lambda_s=\lambda^{1/n},\\
+&\Pi_{ii}=\frac{1+(M-1)\lambda_s}{M},\\
+&\Pi_{ij}=\frac{1-\Pi_{ii}}{M-1}\ (i\ne j)
+\end{aligned}
 ```
 
 One IMM cycle (`imm.py:402-452`), with μ the mode probabilities:
@@ -998,7 +1025,11 @@ c_j=\sum_i\Pi_{ij}\mu_i,\qquad w_{ij}=\frac{\Pi_{ij}\mu_i}{c_j}
 ```
 
 ```math
-x_{0j}=\sum_iw_{ij}x_i,\qquad P_{0j}=\sum_iw_{ij}\big[P_i+(x_i-x_{0j})(x_i-x_{0j})^{\top}\big]\qquad(\text{mixing})
+\begin{aligned}
+&x_{0j}=\sum_iw_{ij}x_i,\\
+&P_{0j}=\sum_iw_{ij}\big[P_i+(x_i-x_{0j})(x_i-x_{0j})^{\top}\big]\\
+&(\text{mixing})
+\end{aligned}
 ```
 
 ```math
@@ -1010,7 +1041,10 @@ probabilities are reweighted in the log domain, starting from the current pre-up
 μ⁻:
 
 ```math
-\ln L_j=-\tfrac12\big(d_j^2+\ln\det S_j+m\ln2\pi\big),\qquad \mu_j^{+}=\frac{\mu_j^{-}L_j}{\sum_l\mu_l^{-}L_l}
+\begin{aligned}
+&\ln L_j=-\tfrac12\big(d_j^2+\ln\det S_j+m\ln2\pi\big),\\
+&\mu_j^{+}=\frac{\mu_j^{-}L_j}{\sum_l\mu_l^{-}L_l}
+\end{aligned}
 ```
 
 The pre-update probability μ⁻ is c from the prediction for the first measurement of a step, and the
@@ -1162,7 +1196,10 @@ a radar measurement and a camera measurement in the same step, and whose radar m
 gate of exactly one confirmed track. The raw pair value is z_c − z_r(bearing); `update` wraps it.
 
 ```math
-\sigma_p^2=\sigma_\beta^2+\sigma_c^2\ (\text{believed values}),\qquad \lvert\delta\rvert\le\sqrt{\gamma_1\,(\sigma_p^2+\sigma_s^2)}\ \ (=5.77^\circ\text{ with the defaults})
+\begin{aligned}
+&\sigma_p^2=\sigma_\beta^2+\sigma_c^2\ (\text{believed values}),\\
+&\lvert\delta\rvert\le\sqrt{\gamma_1\,(\sigma_p^2+\sigma_s^2)}\ \ (=5.77^\circ\text{ with the defaults})
+\end{aligned}
 ```
 
 H₀: b = 0. H₁: b ~ N(0, σ_s²) with σ_s = 1°, plus a random walk of variance q Δt per tracker step,
@@ -1173,11 +1210,18 @@ the drift; the two are different things. For each accepted δ in order
 (`camera_bias.py:171-186`), with the H₁ filter state (b₁, v₁) and logit ℓ of P(H₁):
 
 ```math
-S_1=v_1+\sigma_p^2,\qquad \ell\leftarrow\ell+\Big[-\tfrac12\Big(\tfrac{(\delta-b_1)^2}{S_1}+\ln S_1\Big)\Big]-\Big[-\tfrac12\Big(\tfrac{\delta^2}{\sigma_p^2}+\ln\sigma_p^2\Big)\Big]
+\begin{aligned}
+&S_1=v_1+\sigma_p^2,\\
+&\ell\leftarrow\ell+\Big[-\tfrac12\Big(\tfrac{(\delta-b_1)^2}{S_1}+\ln S_1\Big)\Big]-\Big[-\tfrac12\Big(\tfrac{\delta^2}{\sigma_p^2}+\ln\sigma_p^2\Big)\Big]
+\end{aligned}
 ```
 
 ```math
-k=\frac{v_1}{S_1},\qquad b_1\leftarrow b_1+k(\delta-b_1),\qquad v_1\leftarrow\max\big((1-k)v_1,\ 10^{-18}\big)
+\begin{aligned}
+&k=\frac{v_1}{S_1},\\
+&b_1\leftarrow b_1+k(\delta-b_1),\\
+&v_1\leftarrow\max\big((1-k)v_1,\ 10^{-18}\big)
+\end{aligned}
 ```
 
 The ℓ line runs only in the "spike_slab" mode; the filter line runs in both "spike_slab" and "always".
@@ -1186,7 +1230,12 @@ P₁ = 1/(1 + e^(−ℓ)). The applied estimate is the posterior mean b̂ = E[b 
 uncertainty is the posterior variance s_b² = Var(b | D), where D is the pairs seen so far:
 
 ```math
-\hat b=P_1b_1,\qquad s_b^2=\operatorname{Var}(b\mid D)=P_1v_1+P_1(1-P_1)\,b_1^2\qquad(\text{spike\_slab});\qquad (b_1,v_1)\ (\text{always});\qquad (b_{\text{true}},0)\ (\text{oracle})
+\begin{aligned}
+&\hat b=P_1b_1,\\
+&s_b^2=\mathrm{Var}(b\mid D)=P_1v_1+P_1(1-P_1)\,b_1^2\ (\text{spike\_slab});\\
+&(b_1,v_1)\ (\text{always});\\
+&(b_{\text{true}},0)\ (\text{oracle})
+\end{aligned}
 ```
 
 Three different variances must be kept apart. s_b² is model-based: it is computed from D and from the
@@ -1226,7 +1275,10 @@ derivative of its estimate with respect to a constant bias added to every camera
 J_b = 1 for the camera and 0 for the radar (`src/fusion/filters/sensitivity.py:23-26`):
 
 ```math
-V\leftarrow FV\ (\text{predict}),\qquad V\leftarrow(I-KH)\,V+K\,J_b\ (\text{update, with the }K,H\text{ of that update})
+\begin{aligned}
+&V\leftarrow FV\ (\text{predict}),\\
+&V\leftarrow(I-KH)\,V+K\,J_b\ (\text{update, with the }K,H\text{ of that update})
+\end{aligned}
 ```
 
 The reported snapshot is corrected by the shared estimate (`sensitivity.py:29-45`,
@@ -1256,7 +1308,10 @@ x_{\text{true}}-\hat x_c=u-V\,w,\qquad u=x_{\text{true}}-\hat x(0),\quad w=b_{\t
 ```
 
 ```math
-\operatorname{Cov}(u-Vw)=\operatorname{Cov}(u)+V\operatorname{Var}(w)V^{\top}-\operatorname{Cov}(u,w)V^{\top}-V\operatorname{Cov}(w,u)
+\begin{aligned}
+&\mathrm{Cov}(u-Vw)=\mathrm{Cov}(u)+V\,\mathrm{Var}(w)V^{\top}\\
+&\quad-\mathrm{Cov}(u,w)V^{\top}-V\mathrm{Cov}(w,u)
+\end{aligned}
 ```
 
 The code reports the first two terms, with Cov(u) = P and s_b² in the place of Var(w). The
@@ -1463,18 +1518,23 @@ x_{k+1}=Fx_k+Ga_k,\quad Q=\sigma_a^2GG^{\top},\quad \hat x^-=F\hat x,\quad P^-=F
 Sensors and initialisation (section 3):
 
 ```math
-z_r=\big(\lVert p\rVert,\ \operatorname{atan2}(p_y,p_x)\big)+v_r,\qquad z_c=\operatorname{atan2}(p_y-c_y,p_x-c_x)+b+v_c
+\begin{aligned}
+&z_r=\big(\lVert p\rVert,\ \mathrm{atan2}(p_y,p_x)\big)+v_r,\\
+& z_c=\mathrm{atan2}(p_y-c_y,p_x-c_x)+b+v_c
+\end{aligned}
 ```
 
 ```math
-P_0=\operatorname{blkdiag}\big(J\operatorname{diag}(\sigma_r^2,\sigma_\beta^2)J^{\top},\ \sigma_v^2I_2\big)
+P_0=\mathrm{blkdiag}\big(J\mathrm{diag}(\sigma_r^2,\sigma_\beta^2)J^{\top},\ \sigma_v^2I_2\big)
 ```
 
 Update (sections 4 and 5):
 
 ```math
-\nu=z-h(\hat x^-),\quad \nu_\beta\leftarrow\operatorname{wrap}(\nu_\beta)\ \text{(bearing components only; the range residual is not wrapped)}
+\nu=z-h(\hat x^-),\quad \nu_\beta\leftarrow\mathrm{wrap}(\nu_\beta)
 ```
+
+Only bearing components are wrapped; the range residual is not wrapped.
 
 ```math
 S=HP^-H^{\top}+R,\quad K=P^-H^{\top}S^{-1},\quad \hat x^+=\hat x^-+K\nu
@@ -1491,13 +1551,17 @@ d^2=\nu^{\top}S^{-1}\nu\le\gamma_m,\qquad c=d^2+\ln\det S
 ```
 
 ```math
-\text{ambiguous}\iff\lvert\operatorname{wrap}(\theta_i-\theta_j)\rvert<\sqrt{\gamma_1}\,(s_i+s_j)
+\text{ambiguous}\iff\lvert\mathrm{wrap}(\theta_i-\theta_j)\rvert<\sqrt{\gamma_1}\,(s_i+s_j)
 ```
 
 Lifecycle and coasting (section 8):
 
 ```math
-\text{confirm}\iff h\ge M,\qquad \text{delete tentative}\iff n-h>N-M,\qquad \text{delete confirmed}\iff m>K
+\begin{aligned}
+&\text{confirm}\iff h\ge M,\\
+&\text{delete tentative}\iff n-h>N-M,\\
+&\text{delete confirmed}\iff m>K
+\end{aligned}
 ```
 
 ```math
@@ -1507,7 +1571,12 @@ Lifecycle and coasting (section 8):
 IMM (section 10):
 
 ```math
-c_j=\sum_i\Pi_{ij}\mu_i,\qquad w_{ij}=\tfrac{\Pi_{ij}\mu_i}{c_j},\qquad \Pi_{ii}=\tfrac{1+(M-1)\lambda^{1/n}}{M},\quad \lambda=\tfrac{Ma-1}{M-1}
+\begin{aligned}
+&c_j=\sum_i\Pi_{ij}\mu_i,\\
+&w_{ij}=\tfrac{\Pi_{ij}\mu_i}{c_j},\\
+&\Pi_{ii}=\tfrac{1+(M-1)\lambda^{1/n}}{M},\\
+&\lambda=\tfrac{Ma-1}{M-1}
+\end{aligned}
 ```
 
 ```math
@@ -1515,13 +1584,20 @@ x_{0j}=\sum_iw_{ij}x_i,\qquad P_{0j}=\sum_iw_{ij}\big[P_i+(x_i-x_{0j})(x_i-x_{0j
 ```
 
 ```math
-\mu_j^{+}=\frac{\mu_j^{-}L_j}{\sum_l\mu_l^{-}L_l},\qquad \mu^{-}=c\ \text{(first measurement of a step)},\quad \mu^{-}=\mu^{+}\ \text{of the previous measurement otherwise}
+\mu_j^{+}=\frac{\mu_j^{-}L_j}{\sum_l\mu_l^{-}L_l}
 ```
+
+For the first measurement of a step, μ⁻ = c. Otherwise, μ⁻ is the μ⁺
+from the previous measurement.
 
 Camera bias (section 11):
 
 ```math
-\delta=z_c-z_r=b+v_c-v_r,\qquad \hat b=P_1b_1=E[b\mid D],\qquad s_b^2=\operatorname{Var}(b\mid D)=P_1v_1+P_1(1-P_1)\,b_1^2
+\begin{aligned}
+&\delta=z_c-z_r=b+v_c-v_r,\\
+&\hat b=P_1b_1=E[b\mid D],\\
+&s_b^2=\mathrm{Var}(b\mid D)=P_1v_1+P_1(1-P_1)\,b_1^2
+\end{aligned}
 ```
 
 ```math
@@ -1531,7 +1607,11 @@ V\leftarrow FV,\qquad V\leftarrow(I-KH)V+KJ_b,\qquad \hat x_c=\hat x-V\hat b,\qq
 Statistics (section 9):
 
 ```math
-\bar x\pm t_{0.975,n-1}\tfrac{s}{\sqrt n},\qquad s_d^2=s_a^2+s_b^2-2s_{ab},\qquad \widehat{\operatorname{Var}}(\bar d)=\tfrac{s_d^2}{n}
+\begin{aligned}
+&\bar x\pm t_{0.975,n-1}\tfrac{s}{\sqrt n},\\
+&s_d^2=s_a^2+s_b^2-2s_{ab},\\
+&\widehat{\mathrm{Var}}(\bar d)=\tfrac{s_d^2}{n}
+\end{aligned}
 ```
 
 ```math
