@@ -35,6 +35,32 @@ The noise values are in Methods below.
   every part is consistent: the velocity NEES of the radar-only EKF is 1.86 [1.72, 1.99] against an expected 2 and is flagged
   underconfident in the same file.
 
+## Visualization Demo
+
+![Animated demo of three scenes: radar-camera fusion with the position error over time, crossing targets with track identities and the camera ambiguity rule, and a radar outage with an outage-unaware and an outage-aware tracker side by side](docs/assets/portfolio_demo.webp)
+
+A 45-second animation (10 frames per second, played faster than real time; the speed is printed in each frame), drawn frame by frame
+from the simulation and tracker outputs of this repository. It shows deterministic simulated data, not real sensor recordings, and
+each scene is one seed, not an average over seeds.
+
+1. Radar-camera fusion (scenario `near`, seed 0): ground truth, radar measurements every 1 s, camera bearing rays every 0.1 s (bearing
+   only, no range), the radar-only EKF and the fused EKF, with the position error over time.
+2. Crossing targets (scenario `crossing`, clutter 0, seed 35): confirmed and tentative tracks with the tracker's own track ids, the
+   camera updates, and the camera updates that the ambiguity rule withholds when two bearing gates overlap. The tracker does not
+   report which radar detection each track took, so radar-to-track pairings are not drawn.
+3. Radar outage (scenario `separated`, clutter 0, seed 0): the radar is silent from 20 s for 12 s while the camera keeps delivering
+   bearings. The outage-unaware and the outage-aware tracker run on identical data, side by side, with the 95% position ellipses of
+   the track covariances (drawn 20 times larger than their true size).
+
+To regenerate it (about 5 minutes; needs matplotlib, which the `plot` and `dev` extras install; writes the git-ignored `results/demo/portfolio_demo.webp`):
+
+```
+python scripts/make_demo.py --formats webp
+```
+
+`python scripts/make_demo.py --help` lists the other options. The output is deterministic: the command above reproduces the committed
+`docs/assets/portfolio_demo.webp` byte for byte on the machine that produced it.
+
 ## Results
 
 ### Radar-only against fused tracker
